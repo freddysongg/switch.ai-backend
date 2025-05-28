@@ -1,0 +1,50 @@
+{
+	"name": "backend-switchai",
+	"version": "1.0.0",
+	"scripts": {
+		"dev": "dotenvx run --env-file .env.local -- tsx watch src/index.ts",
+		"start": "dotenvx run --env-file .env.production -- node dist/index.js",
+		"build": "tsc",
+		"format": "prettier --write \"src/**/*.ts\"",
+    	"format:check": "prettier --check \"src/**/*.ts\"",
+		"encrypt": "dotenvx encrypt",
+		"encrypt:local": "dotenvx encrypt -f .env.local",
+		"encrypt:prod": "dotenvx encrypt -f .env.production",
+		"decrypt": "dotenvx decrypt",
+		"db:generate": "dotenvx run --env-file .env.local -- drizzle-kit generate:pg --config drizzle.config.ts",
+		"db:migrate": "dotenvx run --env-file .env.local -- tsx ./src/db/migrate.ts",
+		"db:studio": "dotenvx run --env-file .env.local -- drizzle-kit studio --config drizzle.config.ts",
+		"db:drop": "drizzle-kit drop",
+		"db:reset": "pnpm db:drop && pnpm db:migrate",
+		"supabase:start": "supabase start",
+		"supabase:stop": "supabase stop",
+		"supabase:status": "supabase status"
+	},
+	"devDependencies": {
+		"@dotenvx/dotenvx": "^1.44.1",
+		"@ianvs/prettier-plugin-sort-imports": "^4.4.1",
+		"@types/cors": "^2.8.17",
+		"@types/express": "^5.0.2",
+		"@types/figlet": "^1.5.8",
+		"@types/node": "^22.15.23",
+		"chalk": "^5.4.1",
+		"cors": "^2.8.5",
+		"dotenv": "^16.5.0",
+		"drizzle-kit": "^0.20.14",
+		"figlet": "^1.7.0",
+		"gradient-string": "^3.0.0",
+		"postgres": "^3.4.7",
+		"prettier": "^3.5.3",
+		"prettier-plugin-tailwindcss": "^0.6.11",
+		"supabase": "^1.142.2",
+		"tsx": "^4.7.1",
+		"typescript": "^5.4.2"
+	},
+	"dependencies": {
+		"@google/generative-ai": "^0.24.1",
+		"@supabase/supabase-js": "^2.49.8",
+		"@types/express": "^5.0.2",
+		"drizzle-orm": "^0.29.5",
+		"express": "^5.1.0"
+	}
+}
