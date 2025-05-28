@@ -2,7 +2,8 @@ import { Router } from 'express';
 
 import { ChatController } from '../controllers/chat';
 import { authMiddleware } from '../middleware/auth';
-import { rateLimiter } from '../middleware/rateLimiter';
+
+// import { rateLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 const chatController = new ChatController();
@@ -11,7 +12,7 @@ const chatController = new ChatController();
 router.use(async (req, res, next) => {
   try {
     await authMiddleware(req, res, next);
-    await rateLimiter(req, res, next);
+    // await rateLimiter(req, res, next);
   } catch (error) {
     next(error);
   }

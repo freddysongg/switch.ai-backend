@@ -2,7 +2,6 @@ import type { Config } from 'drizzle-kit'
 import { defineConfig } from 'drizzle-kit'
 import * as dotenv from 'dotenv'
 
-// Load environment variables from .env.local
 dotenv.config({ path: '.env.local' })
 
 if (!process.env.DATABASE_URL) {

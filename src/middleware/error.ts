@@ -3,6 +3,10 @@ import { NextFunction, Request, Response } from 'express';
 export function errorHandler(error: Error, req: Request, res: Response, next: NextFunction): void {
   console.error('Error:', error);
 
+  if (res.headersSent) {
+    return next(error);
+  }
+
   if (error.name === 'DatabaseError') {
     res.status(500).json({ error: 'Database operation failed' });
     return;
