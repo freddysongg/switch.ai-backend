@@ -1,30 +1,52 @@
 import { NextFunction, Request, Response } from 'express';
 
-// For development, always return a test user
-export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
+import { AuthService } from '../services/auth';
+
+const authServiceInstance = new AuthService();
+
+export const authMiddleware = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  console.log('AuthMiddleware: Attempting JWT authentication...');
   try {
-    // const token = req.headers.authorization?.split(' ')[1];
-    // if (!token) {
-    //   return res.status(401).json({ error: 'No authentication token provided' });
-    // }
+    const authHeader = req.headers.authorization;
 
-    // const user = await verifyAuthToken(token);
-    // if (!user) {
-    //   return res.status(401).json({ error: 'Invalid authentication token' });
-    // }
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.warn('AuthMiddleware: No token or malformed Bearer header.');
+      res.status(401).json({ error: 'Unauthorized: Authentication token is required.' });
+      return;
+    }
 
-    // req.user = user;
+    const token = authHeader.split(' ')[1];
+    if (!token) {
+      console.warn('AuthMiddleware: Token string is empty after splitting Bearer header.');
+      res.status(401).json({ error: 'Unauthorized: Token not found in Authorization header.' });
+      return;
+    }
 
-    // Add test user to request
+    console.log('AuthMiddleware: Token found, attempting verification.');
+    const decodedPayload = authServiceInstance.verifyToken(token);
+
+    if (!decodedPayload || !decodedPayload.id || !decodedPayload.email || !decodedPayload.role) {
+      console.warn('AuthMiddleware: JWT payload missing required fields');
+      res.status(401).json({ error: 'Unauthorized: Invalid token payload' });
+      return;
+    }
+
     req.user = {
-      id: '8d813d95-a003-4d6a-8066-ea2d510f4a82',
-      email: 'switchai@example.com',
-      role: 'authenticated'
+      id: decodedPayload.id,
+      email: decodedPayload.email,
+      role: decodedPayload.role,
+      name: decodedPayload.name
     };
 
+    console.log(`AuthMiddleware: User authenticated: ${req.user.id}, Role: ${req.user.role}`);
     next();
   } catch (error) {
-    console.error('Auth middleware error:', error);
-    return res.status(401).json({ error: 'Authentication failed' });
+    console.error('AuthMiddleware: Critical error during authentication:', error);
+    res.status(500).json({ error: 'Internal server error during authentication.' });
+    return;
   }
 };

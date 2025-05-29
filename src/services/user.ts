@@ -2,14 +2,16 @@ import { eq } from 'drizzle-orm';
 import { validate as isValidUUID } from 'uuid';
 
 import { db } from '../db';
-import { DatabaseError, NotFoundError, ValidationError } from '../db/errors';
+import { DatabaseError, ValidationError } from '../db/errors';
 import { users } from '../db/schema';
-import { NewUser, User, UserUpdatePayload } from '../types/user';
+import { NewUserWithHashedPassword, User, UserUpdatePayload } from '../types/user';
 
 export class UserService {
-  async createUser(userData: NewUser): Promise<User> {
-    if (!userData.email) {
-      throw new ValidationError('Email is required to create a user.');
+  async createUser(userData: NewUserWithHashedPassword): Promise<User> {
+    if (!userData.email || !userData.hashedPassword) {
+      throw new ValidationError(
+        'Email and hashed password are required to create a user directly.'
+      );
     }
     try {
       const [newUser] = await db.insert(users).values(userData).returning();
@@ -18,8 +20,7 @@ export class UserService {
       }
       return newUser;
     } catch (error: any) {
-      console.error('Error creating user:', error);
-      // Check for unique constraint violation for email
+      console.error('Error creating user in UserService:', error);
       if (error.code === '23505') {
         throw new ValidationError(`User with email ${userData.email} already exists.`);
       }
@@ -43,10 +44,7 @@ export class UserService {
     }
     try {
       const [user] = await db.select().from(users).where(eq(users.id, id)).limit(1);
-      if (!user) {
-        return null;
-      }
-      return user;
+      return user || null;
     } catch (error: any) {
       console.error(`Error fetching user by ID ${id}:`, error);
       throw new DatabaseError(`Failed to fetch user by ID ${id}.`, error);
@@ -59,6 +57,11 @@ export class UserService {
     }
     if (Object.keys(updateData).length === 0) {
       throw new ValidationError('No update data provided.');
+    }
+    if ((updateData as any).password || (updateData as any).hashedPassword) {
+      throw new ValidationError(
+        'Password updates must go through a dedicated change password endpoint.'
+      );
     }
 
     try {
@@ -91,14 +94,14 @@ export class UserService {
         .where(eq(users.id, id))
         .returning({ id: users.id });
       if (deletedUsers.length === 0) {
-        return null; // User not found
+        return null;
       }
       return deletedUsers[0];
     } catch (error: any) {
       console.error(`Error deleting user ID ${id}:`, error);
       if (error.code === '23503') {
         throw new DatabaseError(
-          `Cannot delete user ID ${id} as it is referenced by other records (e.g., conversations, messages).`,
+          `Cannot delete user ID ${id} as it is referenced by other records.`,
           error
         );
       }

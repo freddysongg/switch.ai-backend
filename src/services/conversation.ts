@@ -2,8 +2,8 @@ import { and, eq } from 'drizzle-orm';
 import { validate as isValidUUID } from 'uuid';
 
 import { db } from '../db';
-import { AuthError, DatabaseError, NotFoundError, ValidationError } from '../db/errors';
-import { conversations, users } from '../db/schema';
+import { AuthError, DatabaseError, ValidationError } from '../db/errors';
+import { conversations } from '../db/schema';
 import { Conversation, ConversationUpdatePayload, NewConversation } from '../types/conversation';
 
 export class ConversationService {

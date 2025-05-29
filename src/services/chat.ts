@@ -44,12 +44,10 @@ export class ChatService {
       .orderBy(desc(messagesTable.createdAt))
       .limit(AI_CONFIG.CHAT_HISTORY_MAX_TURNS * 2);
 
-    return dbMessages
-      .reverse() // Oldest to newest for prompt sequence
-      .map((m) => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content
-      }));
+    return dbMessages.reverse().map((m) => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content
+    }));
   }
 
   /** Full RAG-powered message processing */
@@ -84,7 +82,7 @@ export class ChatService {
       const currentConversationId = conversation.id;
 
       // 2) Save user message
-      const [userMsgRecord] = await db
+      await db
         .insert(messagesTable)
         .values({
           conversationId: currentConversationId,
@@ -98,6 +96,7 @@ export class ChatService {
 
       // 3) Embed the user query
       const queryEmbedding = await embeddingService.embedText(rawUserQuery);
+      const queryEmbeddingSql = arrayToVector(queryEmbedding);
 
       // 4) Retrieve top-K context from switches table
       const retrievedRawContexts = await db.execute<
@@ -109,21 +108,19 @@ export class ChatService {
           s.type,
           s.spring,
           s.actuation_force as "actuationForce",
-          -- Create a description_text for context. This should ideally be a pre-processed field.
-          -- For this example, we'll concatenate a few key fields if a dedicated description field isn't primary.
           (s.name || ' is a ' || COALESCE(s.type, 'N/A') || ' switch by ' || s.manufacturer || 
            '. It has a spring type of ' || COALESCE(s.spring, 'N/A') || 
            ' and an actuation force of ' || COALESCE(CAST(s.actuation_force AS TEXT), 'N/A') || 'g.' ||
            ' Top housing: ' || COALESCE(s.top_housing, 'N/A') || ', Bottom housing: ' || COALESCE(s.bottom_housing, 'N/A') || ', Stem: ' || COALESCE(s.stem, 'N/A') ||'.'
           ) as description_text,
-          1 - (s.embedding::vector <=> ${arrayToVector(queryEmbedding)}::vector) AS similarity
+          1 - ((s.embedding::text)::vector <=> ${queryEmbeddingSql}) AS similarity
         FROM ${switchesTable} AS s
         ORDER BY similarity DESC
         LIMIT ${AI_CONFIG.CONTEXT_RESULTS_COUNT}
       `);
 
       const switchContextsForPrompt = retrievedRawContexts.filter(
-        (c) => c.similarity >= AI_CONFIG.SIMILARITY_THRESHOLD
+        (c) => c.similarity != null && c.similarity >= AI_CONFIG.SIMILARITY_THRESHOLD
       );
 
       // 5) Fetch recent history
@@ -170,7 +167,15 @@ export class ChatService {
         metadata: assistantMsgRecord.metadata as Record<string, any>
       };
     } catch (error: any) {
-      console.error('Error processing message in ChatService:', error.message, error.stack);
+      console.error(
+        'Error processing message in ChatService:',
+        error.message,
+        error.cause || error.stack
+      );
+      if (error.cause && error.cause.query) {
+        console.error('Failed Drizzle Query:', error.cause.query);
+        console.error('Failed Drizzle Params:', error.cause.params);
+      }
       return {
         id: `error-${Date.now()}`,
         role: 'assistant',

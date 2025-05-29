@@ -18,6 +18,8 @@ export const users = pgTable('users', {
     .$defaultFn(() => crypto.randomUUID()),
   email: text('email').unique().notNull(),
   name: text('name'),
+  hashedPassword: text('hashed_password'),
+  role: text('role').notNull().default('user'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull()
 });
