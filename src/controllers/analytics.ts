@@ -1,9 +1,11 @@
 import { Request, Response } from 'express';
 
-import { DatabaseError, ValidationError } from '../db/errors';
-import { AdminAnalyticsService } from '../services/analytics';
-import { AnalyticsEventListFilters, PaginatedResponse } from '../types/admin';
-import { AnalyticsEvent as DbAnalyticsEvent } from '../types/db';
+import { DatabaseError, ValidationError } from '@/db/errors';
+
+import { AnalyticsEventListFilters, PaginatedResponse } from '@/types/admin';
+import { AnalyticsEvent as DbAnalyticsEvent } from '@/types/db';
+
+import { AdminAnalyticsService } from '@/services/analytics';
 
 export class AdminAnalyticsController {
   private analyticsService: AdminAnalyticsService;

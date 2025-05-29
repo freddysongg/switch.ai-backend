@@ -1,8 +1,8 @@
+import { db } from '@/db';
 import { GenerativeModel, GoogleGenerativeAI } from '@google/generative-ai';
 import { eq, sql } from 'drizzle-orm';
 
-import { db } from '../db';
-import { messageEmbeddings, messages, vectorFromJson } from '../db/schema';
+import { messageEmbeddings, messages, vectorFromJson } from '@/db/schema';
 
 let genAI: GoogleGenerativeAI | null = null;
 let embeddingModel: GenerativeModel | null = null;

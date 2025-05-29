@@ -1,5 +1,5 @@
-import { AI_CONFIG } from '../config/ai.config';
-import { ChatMessage } from '../types/chat';
+import { ChatMessage } from '@/types/chat';
+import { AI_CONFIG } from '@/config/ai.config';
 
 interface SwitchContextItem {
   name: string;

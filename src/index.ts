@@ -1,10 +1,11 @@
+import router from '@/routes';
 import cors from 'cors';
 import * as dotenv from 'dotenv';
 import express from 'express';
 
-import { ASCII_LOGO, SERVER_READY } from './config/ascii';
-import { errorHandler } from './middleware/error';
-import router from './routes';
+import { ASCII_LOGO, SERVER_READY } from '@/config/ascii';
+
+import { errorHandler } from '@/middleware/error';
 
 dotenv.config({ path: '.env.local' });
 

@@ -1,9 +1,11 @@
 import { Request, Response } from 'express';
 import { validate as isValidUUID } from 'uuid';
 
-import { DatabaseError, ValidationError } from '../db/errors';
-import { UserService } from '../services/user';
-import { UserUpdatePayload } from '../types/user';
+import { DatabaseError, ValidationError } from '@/db/errors';
+
+import { UserUpdatePayload } from '@/types/user';
+
+import { UserService } from '@/services/user';
 
 export class UserController {
   private userService: UserService;
@@ -114,12 +116,10 @@ export class UserController {
           console.log(
             `PUT /api/users/${targetUserId} - User found but no changes made or update failed.`
           );
-          res
-            .status(200)
-            .json({
-              message:
-                'User found, but no changes were applied or update did not return modified data.'
-            });
+          res.status(200).json({
+            message:
+              'User found, but no changes were applied or update did not return modified data.'
+          });
         }
       }
     } catch (error: any) {

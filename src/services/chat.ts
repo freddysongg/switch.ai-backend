@@ -1,9 +1,11 @@
+import { arrayToVector, db, withDb } from '@/db';
 import { and, desc, eq, sql } from 'drizzle-orm';
 
-import { AI_CONFIG } from '../config/ai.config';
-import { arrayToVector, db, withDb } from '../db';
-import { conversations, messages as messagesTable, switches as switchesTable } from '../db/schema';
-import { ChatRequest, ChatResponse, ChatMessage as UIChatMessage } from '../types/chat';
+import { conversations, messages as messagesTable, switches as switchesTable } from '@/db/schema';
+
+import { ChatRequest, ChatResponse, ChatMessage as UIChatMessage } from '@/types/chat';
+import { AI_CONFIG } from '@/config/ai.config';
+
 import { LocalEmbeddingService } from './embeddingsLocal';
 import { GeminiService } from './gemini';
 import { PromptBuilder } from './promptBuilder';

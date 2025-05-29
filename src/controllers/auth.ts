@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
 
-import { AuthError, DatabaseError, ValidationError } from '../db/errors';
-import { AuthService } from '../services/auth';
+import { AuthError, DatabaseError, ValidationError } from '@/db/errors';
+
+import { AuthService } from '@/services/auth';
 
 export class AuthController {
   private authService: AuthService;

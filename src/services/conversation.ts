@@ -1,10 +1,11 @@
+import { db } from '@/db';
 import { and, eq } from 'drizzle-orm';
 import { validate as isValidUUID } from 'uuid';
 
-import { db } from '../db';
-import { AuthError, DatabaseError, ValidationError } from '../db/errors';
-import { conversations } from '../db/schema';
-import { Conversation, ConversationUpdatePayload, NewConversation } from '../types/conversation';
+import { AuthError, DatabaseError, ValidationError } from '@/db/errors';
+import { conversations } from '@/db/schema';
+
+import { Conversation, ConversationUpdatePayload, NewConversation } from '@/types/conversation';
 
 export class ConversationService {
   async createConversation(payload: NewConversation, userId: string): Promise<Conversation> {

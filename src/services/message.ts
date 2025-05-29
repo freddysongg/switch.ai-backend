@@ -1,11 +1,12 @@
 // src/services/message.service.ts
+import { db } from '@/db';
 import { and, desc, eq } from 'drizzle-orm';
 import { validate as isValidUUID } from 'uuid';
 
-import { db } from '../db';
-import { AuthError, DatabaseError, NotFoundError, ValidationError } from '../db/errors';
-import { conversations, messages } from '../db/schema';
-import { Message, MessageUpdatePayload, NewMessage } from '../types/message';
+import { AuthError, DatabaseError, ValidationError } from '@/db/errors';
+import { conversations, messages } from '@/db/schema';
+
+import { Message, MessageUpdatePayload, NewMessage } from '@/types/message';
 
 export class MessageService {
   private async userOwnsConversation(userId: string, conversationId: string): Promise<boolean> {

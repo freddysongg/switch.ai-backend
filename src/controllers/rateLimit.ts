@@ -1,9 +1,11 @@
 import { Request, Response } from 'express';
 import { validate as isValidUUID } from 'uuid';
 
-import { DatabaseError, ValidationError } from '../db/errors';
-import { AdminRateLimitService } from '../services/rateLimit';
-import { RateLimitListFilters } from '../types/admin';
+import { DatabaseError, ValidationError } from '@/db/errors';
+
+import { RateLimitListFilters } from '@/types/admin';
+
+import { AdminRateLimitService } from '@/services/rateLimit';
 
 export class AdminRateLimitController {
   private rateLimitService: AdminRateLimitService;

@@ -41,5 +41,5 @@ export async function withDb<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 export * from './schema';
-export * from '../types/db';
+export * from '@/types/db';
 export * from './errors';

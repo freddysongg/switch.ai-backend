@@ -1,8 +1,8 @@
+import { db } from '@/db';
 import { and, eq, gt, sql } from 'drizzle-orm';
 import { NextFunction, Request, Response } from 'express';
 
-import { db } from '../db';
-import { rateLimits } from '../db/schema';
+import { rateLimits } from '@/db/schema';
 
 // Rate limits for different user types
 const LIMITS = {

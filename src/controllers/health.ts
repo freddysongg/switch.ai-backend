@@ -1,9 +1,10 @@
+import { db, withDb } from '@/db';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Request, Response } from 'express';
 
-import { db, withDb } from '../db';
-import { health } from '../db/schema';
-import { supabase } from '../utils/supabase';
+import { health } from '@/db/schema';
+
+import { supabase } from '@/utils/supabase';
 
 export class HealthController {
   async check(req: Request, res: Response) {

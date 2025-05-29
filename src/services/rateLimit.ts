@@ -1,11 +1,12 @@
+import { db } from '@/db';
 import { and, asc, desc as drizzleDesc, eq, ilike, sql, SQL } from 'drizzle-orm';
 import { validate as isValidUUID } from 'uuid';
 
-import { db } from '../db';
-import { DatabaseError, ValidationError } from '../db/errors';
-import { rateLimits } from '../db/schema';
-import { RateLimitListFilters } from '../types/admin';
-import { RateLimit } from '../types/db';
+import { DatabaseError, ValidationError } from '@/db/errors';
+import { rateLimits } from '@/db/schema';
+
+import { RateLimitListFilters } from '@/types/admin';
+import { RateLimit } from '@/types/db';
 
 export class AdminRateLimitService {
   async listRateLimits(

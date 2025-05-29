@@ -1,4 +1,4 @@
-import { AnalyticsEvent as DbAnalyticsEvent, RateLimit } from './db';
+import { AnalyticsEvent as DbAnalyticsEvent, RateLimit } from '@/db';
 
 export interface RateLimitListFilters {
   userId?: string;
