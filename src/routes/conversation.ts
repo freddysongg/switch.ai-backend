@@ -1,8 +1,6 @@
 import { Router } from 'express';
 
-import { ConversationController } from '@/controllers/conversation';
-
-import { authMiddleware } from '../middleware/auth';
+import { ConversationController } from '../controllers/conversation.js';
 
 const router = Router();
 const conversationController = new ConversationController();

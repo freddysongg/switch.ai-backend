@@ -3,8 +3,8 @@ import 'dotenv/config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 
-import { DatabaseError } from './errors';
-import * as schema from './schema';
+import { DatabaseError } from './errors.js';
+import * as schema from './schema.js';
 
 if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL is not defined');
@@ -40,6 +40,6 @@ export async function withDb<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
-export * from './schema';
-export * from '@/types/db';
-export * from './errors';
+export * from './schema.js';
+export * from '../types/db.js';
+export * from './errors.js';

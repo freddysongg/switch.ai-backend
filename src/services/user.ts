@@ -1,11 +1,10 @@
-import { db } from '@/db';
 import { eq } from 'drizzle-orm';
 import { validate as isValidUUID } from 'uuid';
 
-import { DatabaseError, ValidationError } from '@/db/errors';
-import { users } from '@/db/schema';
-
-import { NewUserWithHashedPassword, User, UserUpdatePayload } from '@/types/user';
+import { DatabaseError, ValidationError } from '../db/errors.js';
+import { db } from '../db/index.js';
+import { users } from '../db/schema.js';
+import { NewUserWithHashedPassword, User, UserUpdatePayload } from '../types/user.js';
 
 export class UserService {
   async createUser(userData: NewUserWithHashedPassword): Promise<User> {

@@ -6,7 +6,7 @@ import {
   HarmCategory
 } from '@google/generative-ai';
 
-import { AI_CONFIG } from '@/config/ai.config';
+import { AI_CONFIG } from '../config/ai.config.js';
 
 export class GeminiService {
   private model: GenerativeModel;

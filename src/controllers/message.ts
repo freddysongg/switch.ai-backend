@@ -2,11 +2,9 @@
 import { Request, Response } from 'express';
 import { validate as isValidUUID } from 'uuid';
 
-import { AuthError, DatabaseError, ValidationError } from '@/db/errors';
-
-import { MessageCreatePayload, MessageUpdatePayload } from '@/types/message';
-
-import { MessageService } from '@/services/message';
+import { AuthError, DatabaseError, ValidationError } from '../db/errors.js';
+import { MessageService } from '../services/message.js';
+import { MessageCreatePayload, MessageUpdatePayload } from '../types/message.js';
 
 export class MessageController {
   private messageService: MessageService;

@@ -1,11 +1,9 @@
 import { Request, Response } from 'express';
 import { validate as isValidUUID } from 'uuid';
 
-import { DatabaseError, ValidationError } from '@/db/errors';
-
-import { UserUpdatePayload } from '@/types/user';
-
-import { UserService } from '@/services/user';
+import { DatabaseError, ValidationError } from '../db/errors.js';
+import { UserService } from '../services/user.js';
+import { UserUpdatePayload } from '../types/user.js';
 
 export class UserController {
   private userService: UserService;

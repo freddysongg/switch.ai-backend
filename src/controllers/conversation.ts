@@ -1,11 +1,9 @@
 import { Request, Response } from 'express';
 import { validate as isValidUUID } from 'uuid';
 
-import { AuthError, DatabaseError, ValidationError } from '@/db/errors';
-
-import { ConversationCreatePayload, ConversationUpdatePayload } from '@/types/conversation';
-
-import { ConversationService } from '@/services/conversation';
+import { AuthError, DatabaseError, ValidationError } from '../db/errors.js';
+import { ConversationService } from '../services/conversation.js';
+import { ConversationCreatePayload, ConversationUpdatePayload } from '../types/conversation.js';
 
 export class ConversationController {
   private conversationService: ConversationService;

@@ -1,9 +1,8 @@
 import { Router } from 'express';
 
-import { AdminAnalyticsController } from '@/controllers/analytics';
-import { AdminRateLimitController } from '@/controllers/rateLimit';
-
-import { adminAuthMiddleware } from '@/middleware/admin';
+import { AdminAnalyticsController } from '../controllers/analytics.js';
+import { AdminRateLimitController } from '../controllers/rateLimit.js';
+import { adminAuthMiddleware } from '../middleware/admin.js';
 
 const router = Router();
 

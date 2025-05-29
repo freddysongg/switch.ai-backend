@@ -1,10 +1,10 @@
 import { sql } from 'drizzle-orm';
 import { Request, Response } from 'express';
 
-import { AI_CONFIG } from '../config/ai.config';
-import { arrayToVector, db } from '../db';
-import { ChatService } from '../services/chat';
-import { LocalEmbeddingService } from '../services/embeddingsLocal';
+import { AI_CONFIG } from '../config/ai.config.js';
+import { arrayToVector, db } from '../db/index.js';
+import { ChatService } from '../services/chat.js';
+import { LocalEmbeddingService } from '../services/embeddingsLocal.js';
 
 const chatService = new ChatService();
 const localEmbeddingService = new LocalEmbeddingService();

@@ -1,12 +1,11 @@
-import { db } from '@/db';
 import { and, asc, desc as drizzleDesc, eq, gte, ilike, lte, sql, SQL } from 'drizzle-orm';
 import { validate as isValidUUID } from 'uuid';
 
-import { DatabaseError, ValidationError } from '@/db/errors';
-import { analyticsEvents } from '@/db/schema';
-
-import { AnalyticsEventListFilters } from '@/types/admin';
-import { AnalyticsEvent as DbAnalyticsEvent } from '@/types/db';
+import { DatabaseError, ValidationError } from '../db/errors.js';
+import { db } from '../db/index.js';
+import { analyticsEvents } from '../db/schema.js';
+import { AnalyticsEventListFilters } from '../types/admin.js';
+import { AnalyticsEvent as DbAnalyticsEvent } from '../types/db.js';
 
 export class AdminAnalyticsService {
   async listAnalyticsEvents(

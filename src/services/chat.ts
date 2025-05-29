@@ -1,14 +1,16 @@
-import { arrayToVector, db, withDb } from '@/db';
 import { and, desc, eq, sql } from 'drizzle-orm';
 
-import { conversations, messages as messagesTable, switches as switchesTable } from '@/db/schema';
-
-import { ChatRequest, ChatResponse, ChatMessage as UIChatMessage } from '@/types/chat';
-import { AI_CONFIG } from '@/config/ai.config';
-
-import { LocalEmbeddingService } from './embeddingsLocal';
-import { GeminiService } from './gemini';
-import { PromptBuilder } from './promptBuilder';
+import { AI_CONFIG } from '../config/ai.config.js';
+import { arrayToVector, db, withDb } from '../db/index.js';
+import {
+  conversations,
+  messages as messagesTable,
+  switches as switchesTable
+} from '../db/schema.js';
+import { ChatRequest, ChatResponse, ChatMessage as UIChatMessage } from '../types/chat.js';
+import { LocalEmbeddingService } from './embeddingsLocal.js';
+import { GeminiService } from './gemini.js';
+import { PromptBuilder } from './promptBuilder.js';
 
 interface SwitchContextForPrompt {
   [key: string]: unknown;

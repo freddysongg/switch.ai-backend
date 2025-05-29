@@ -1,6 +1,6 @@
 import { env, FeatureExtractionPipeline, pipeline } from '@xenova/transformers';
 
-import { AI_CONFIG } from '@/config/ai.config';
+import { AI_CONFIG } from '../config/ai.config.js';
 
 env.cacheDir = './.cache/transformers_cache';
 env.allowLocalModels = true;

@@ -1,6 +1,7 @@
 {
 	"name": "backend-switchai",
 	"version": "1.0.0",
+	"type": "module",
 	"scripts": {
 		"dev": "dotenvx run --env-file .env.local -- tsx watch src/index.ts",
 		"start": "dotenvx run --env-file .env.production -- node dist/index.js",

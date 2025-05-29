@@ -1,13 +1,12 @@
 import { Router } from 'express';
 
-import { authMiddleware } from '@/middleware/auth';
-
-import authRouter from './auth';
-import chatRouter from './chat';
-import conversationRouter from './conversation';
-import healthRouter from './health';
-import messageRouter from './message';
-import userRouter from './user';
+import { authMiddleware } from '../middleware/auth.js';
+import authRouter from './auth.js';
+import chatRouter from './chat.js';
+import conversationRouter from './conversation.js';
+import healthRouter from './health.js';
+import messageRouter from './message.js';
+import userRouter from './user.js';
 
 const router = Router();
 

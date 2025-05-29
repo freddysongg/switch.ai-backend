@@ -1,12 +1,11 @@
-import { db } from '@/db';
 import bcrypt from 'bcrypt';
 import { eq } from 'drizzle-orm';
 import jwt, { Secret, SignOptions } from 'jsonwebtoken';
 
-import { AuthError, DatabaseError, ValidationError } from '@/db/errors';
-import { users } from '@/db/schema';
-
-import { JwtPayload, NewUserWithHashedPassword, User } from '@/types/user';
+import { AuthError, DatabaseError, ValidationError } from '../db/errors.js';
+import { db } from '../db/index.js';
+import { users } from '../db/schema.js';
+import { JwtPayload, NewUserWithHashedPassword, User } from '../types/user.js';
 
 const JWT_SECRET_KEY: Secret = process.env.JWT_SECRET as Secret;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
