@@ -1,14 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
 
-import type { Database } from '../db/types';
+import type { Database } from '../types/db';
 
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+if (!process.env.DATABASE_URL || !process.env.DATABASE_ANON_KEY) {
   throw new Error('Missing Supabase credentials');
 }
 
 export const supabase = createClient<Database>(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
+  process.env.DATABASE_URL,
+  process.env.DATABASE_ANON_KEY
 );
 
 export async function getUserById(userId: string) {

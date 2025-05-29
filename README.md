@@ -107,11 +107,9 @@ This project uses `dotenvx` for managing environment variables.
 
 2.  **Populate environment variables:**
     Edit the `.env.local` (and/or `.env.production`) file to include the necessary credentials and configuration values for your environment. This will include:
-    - `PORT`: The port on which the server will run.
     - `DATABASE_URL`: The connection string for your PostgreSQL database.
-    - `SUPABASE_URL`: Your Supabase project URL (if using Supabase).
-    - `SUPABASE_ANON_KEY`: Your Supabase anonymous key (if using Supabase).
-    - `GOOGLE_API_KEY`: Your API key for Google Generative AI services.
+    - `DATABASE_ANON_KEY`: Your Supabase anonymous key (if using Supabase).
+    - `GEMINI_API_KEY`: Your API key for Google Generative AI services.
     - Other service-specific keys or configurations.
 
 3.  **Encryption (Optional but Recommended):**

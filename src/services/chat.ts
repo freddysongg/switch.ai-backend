@@ -1,267 +1,236 @@
-import { GenerativeModel, GoogleGenerativeAI } from '@google/generative-ai';
 import { and, desc, eq, sql } from 'drizzle-orm';
 
-import { db } from '../db';
-import { conversations, messageEmbeddings, messages } from '../db/schema';
-import { ChatMessage, ChatRequest, ChatResponse } from '../interfaces/chat';
-import { EmbeddingsService } from './embeddings';
+import { AI_CONFIG } from '../config/ai.config';
+import { arrayToVector, db, withDb } from '../db';
+import { conversations, messages as messagesTable, switches as switchesTable } from '../db/schema';
+import { ChatRequest, ChatResponse, ChatMessage as UIChatMessage } from '../types/chat';
+import { LocalEmbeddingService } from './embeddingsLocal';
+import { GeminiService } from './gemini';
+import { PromptBuilder } from './promptBuilder';
 
-// Constants for chat configuration
-const MAX_HISTORY_MESSAGES = 10;
-const MAX_MESSAGE_LENGTH = 32000;
-const MAX_CONTEXT_LENGTH = 128000;
-
-// Gemini key is optional for now
-let genAI: GoogleGenerativeAI | null = null;
-let model: GenerativeModel | null = null;
-const embeddingsService = new EmbeddingsService();
-
-if (process.env.GOOGLE_API_KEY) {
-  genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-  model = genAI.getGenerativeModel({
-    model: 'gemini-pro',
-    generationConfig: {
-      maxOutputTokens: 2048,
-      temperature: 0.7,
-      topP: 0.8,
-      topK: 40
-    }
-  });
-} else {
-  console.warn('Warning: GOOGLE_API_KEY not defined, LLM features will be unavailable');
+interface SwitchContextForPrompt {
+  [key: string]: unknown;
+  name: string;
+  manufacturer: string;
+  type: string | null;
+  spring: string | null;
+  actuationForce: number | null;
+  description_text?: string;
+  similarity?: number;
 }
 
+const embeddingService = new LocalEmbeddingService();
+const geminiService = new GeminiService();
+
 export class ChatService {
-  // Helper to truncate text while preserving word boundaries
-  private truncateText(text: string, maxLength: number): string {
-    if (text.length <= maxLength) return text;
-    const truncated = text.slice(0, maxLength);
-    const lastSpace = truncated.lastIndexOf(' ');
-    return truncated.slice(0, lastSpace) + '...';
+  private truncateText(text: string, max: number): string {
+    if (text.length <= max) return text;
+    const cut = text.slice(0, max);
+    const lastSpaceIndex = cut.lastIndexOf(' ');
+    return (lastSpaceIndex > 0 ? cut.slice(0, lastSpaceIndex) : cut) + '...';
   }
 
-  // Helper to get recent conversation history
-  private async getConversationHistory(
-    conversationId: string,
-    limit = MAX_HISTORY_MESSAGES
-  ): Promise<ChatMessage[]> {
-    const msgs = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.conversationId, conversationId))
-      .orderBy(desc(messages.createdAt))
-      .limit(limit);
+  // Fetches history messages formatted for the prompt builder
+  private async getConversationHistoryForPrompt(
+    conversationId: string
+  ): Promise<Pick<UIChatMessage, 'role' | 'content'>[]> {
+    const dbMessages = await db
+      .select({
+        role: messagesTable.role,
+        content: messagesTable.content
+      })
+      .from(messagesTable)
+      .where(eq(messagesTable.conversationId, conversationId))
+      .orderBy(desc(messagesTable.createdAt))
+      .limit(AI_CONFIG.CHAT_HISTORY_MAX_TURNS * 2);
 
-    return msgs.reverse().map((msg) => ({
-      id: msg.id,
-      role: msg.role as 'user' | 'assistant',
-      content: msg.content,
-      metadata: msg.metadata as Record<string, any>,
-      createdAt: msg.createdAt
-    }));
+    return dbMessages
+      .reverse() // Oldest to newest for prompt sequence
+      .map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content
+      }));
   }
 
-  // Process a new chat message
+  /** Full RAG-powered message processing */
   async processMessage(userId: string, request: ChatRequest): Promise<ChatResponse> {
-    const { message: rawMessage, conversationId } = request;
-    const message = this.truncateText(rawMessage, MAX_MESSAGE_LENGTH);
+    const rawUserQuery = this.truncateText(request.message, AI_CONFIG.MAX_OUTPUT_TOKENS * 100);
 
     try {
-      if (!model) {
-        throw new Error('LLM service is not available');
-      }
-
-      // Get or create conversation
-      let conversation;
-      if (conversationId) {
-        const [existing] = await db
-          .select()
-          .from(conversations)
-          .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)))
-          .limit(1);
-
-        if (!existing) {
-          throw new Error('Conversation not found or unauthorized');
+      // 1) Get or create conversation
+      let conversation = await withDb(async () => {
+        if (request.conversationId) {
+          const [existing] = await db
+            .select()
+            .from(conversations)
+            .where(
+              and(eq(conversations.id, request.conversationId), eq(conversations.userId, userId))
+            )
+            .limit(1);
+          if (!existing) throw new Error('Conversation not found or unauthorized');
+          return existing;
         }
-        conversation = existing;
-      } else {
         const [created] = await db
           .insert(conversations)
           .values({
             userId,
-            title: this.truncateText(message, 100),
+            title: this.truncateText(rawUserQuery, 100),
             createdAt: new Date(),
             updatedAt: new Date()
           })
           .returning();
+        return created;
+      });
+      const currentConversationId = conversation.id;
 
-        conversation = created;
-      }
-
-      // Save user message
-      const [userMessage] = await db
-        .insert(messages)
+      // 2) Save user message
+      const [userMsgRecord] = await db
+        .insert(messagesTable)
         .values({
-          conversationId: conversation.id,
+          conversationId: currentConversationId,
           userId,
-          content: message,
+          content: rawUserQuery,
           role: 'user',
-          createdAt: new Date()
+          createdAt: new Date(),
+          timestamp: new Date()
         })
         .returning();
 
-      try {
-        // Create embeddings for semantic search
-        await embeddingsService.createEmbedding(userMessage.id, message);
-      } catch (error) {
-        console.warn('Failed to create embedding, continuing without semantic search:', error);
-      }
+      // 3) Embed the user query
+      const queryEmbedding = await embeddingService.embedText(rawUserQuery);
 
-      // Get conversation history
-      const history = await this.getConversationHistory(conversation.id);
+      // 4) Retrieve top-K context from switches table
+      const retrievedRawContexts = await db.execute<
+        SwitchContextForPrompt & { similarity: number }
+      >(sql`
+        SELECT 
+          s.name, 
+          s.manufacturer, 
+          s.type,
+          s.spring,
+          s.actuation_force as "actuationForce",
+          -- Create a description_text for context. This should ideally be a pre-processed field.
+          -- For this example, we'll concatenate a few key fields if a dedicated description field isn't primary.
+          (s.name || ' is a ' || COALESCE(s.type, 'N/A') || ' switch by ' || s.manufacturer || 
+           '. It has a spring type of ' || COALESCE(s.spring, 'N/A') || 
+           ' and an actuation force of ' || COALESCE(CAST(s.actuation_force AS TEXT), 'N/A') || 'g.' ||
+           ' Top housing: ' || COALESCE(s.top_housing, 'N/A') || ', Bottom housing: ' || COALESCE(s.bottom_housing, 'N/A') || ', Stem: ' || COALESCE(s.stem, 'N/A') ||'.'
+          ) as description_text,
+          1 - (s.embedding::vector <=> ${arrayToVector(queryEmbedding)}::vector) AS similarity
+        FROM ${switchesTable} AS s
+        ORDER BY similarity DESC
+        LIMIT ${AI_CONFIG.CONTEXT_RESULTS_COUNT}
+      `);
 
-      // Find relevant messages using semantic search
-      let relevantContext: ChatMessage[] = [];
-      try {
-        const similarMessages = await embeddingsService.searchSimilar(message, 3);
-        relevantContext = similarMessages
-          .filter((msg) => msg.conversationId !== conversation.id)
-          .filter((msg) => msg.similarity > 0.7)
-          .map((msg) => ({
-            id: msg.id,
-            role: msg.role as 'user' | 'assistant',
-            content: msg.content,
-            metadata: msg.metadata || {},
-            createdAt: msg.createdAt
-          }));
-      } catch (error) {
-        console.warn('Failed to fetch similar messages, continuing without context:', error);
-      }
+      const switchContextsForPrompt = retrievedRawContexts.filter(
+        (c) => c.similarity >= AI_CONFIG.SIMILARITY_THRESHOLD
+      );
 
-      // Prepare chat history for the model
-      const chatHistory = [...history, ...relevantContext].map((msg) => ({
-        role: msg.role === 'user' ? 'user' : 'model',
-        parts: [{ text: msg.content }]
-      }));
+      // 5) Fetch recent history
+      const historyForPrompt = await this.getConversationHistoryForPrompt(currentConversationId);
 
-      // Start chat with history
-      const chat = model.startChat({
-        history: chatHistory,
-        generationConfig: {
-          maxOutputTokens: 2048,
-          temperature: 0.7,
-          topP: 0.8,
-          topK: 40
-        }
-      });
+      // 6) Build prompt using the new PromptBuilder and structured config
+      const prompt = PromptBuilder.buildPrompt(
+        historyForPrompt,
+        switchContextsForPrompt,
+        rawUserQuery
+      );
 
-      // Get response with timeout
-      const responsePromise = chat.sendMessage(message);
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Response timeout')), 30000);
-      });
+      // 7) Call Gemini
+      const assistantText = await geminiService.generate(prompt);
 
-      let text: string;
-      try {
-        const result = await Promise.race([responsePromise, timeoutPromise]);
-        const response = await (result as any).response;
-        text = response.text();
-      } catch (error) {
-        console.error('LLM response error:', error);
-        text =
-          "I apologize, but I'm having trouble generating a response right now. Please try again in a moment.";
-      }
-
-      // Save assistant message
-      const [assistantMessage] = await db
-        .insert(messages)
+      // 8) Save assistant response
+      const [assistantMsgRecord] = await db
+        .insert(messagesTable)
         .values({
-          conversationId: conversation.id,
+          conversationId: currentConversationId,
           userId,
-          content: text,
+          content: assistantText,
           role: 'assistant',
           metadata: {
-            model: 'gemini-pro'
+            model: AI_CONFIG.GEMINI_MODEL,
+            promptLength: prompt.length,
+            contextItems: switchContextsForPrompt.length
           },
-          createdAt: new Date()
+          createdAt: new Date(),
+          timestamp: new Date()
         })
         .returning();
 
-      // Update conversation timestamp
+      // 9) Update conversation timestamp
       await db
         .update(conversations)
         .set({ updatedAt: new Date() })
-        .where(eq(conversations.id, conversation.id));
-
-      // Create embeddings for the assistant's response
-      try {
-        await embeddingsService.createEmbedding(assistantMessage.id, text);
-      } catch (error) {
-        console.warn('Failed to create embedding for response:', error);
-      }
+        .where(eq(conversations.id, currentConversationId));
 
       return {
-        id: assistantMessage.id,
+        id: assistantMsgRecord.id,
         role: 'assistant',
-        content: text,
-        metadata: assistantMessage.metadata as Record<string, any>
+        content: assistantText,
+        metadata: assistantMsgRecord.metadata as Record<string, any>
       };
-    } catch (error) {
-      console.error('Chat processing error:', error);
-      throw error;
+    } catch (error: any) {
+      console.error('Error processing message in ChatService:', error.message, error.stack);
+      return {
+        id: `error-${Date.now()}`,
+        role: 'assistant',
+        content: AI_CONFIG.FALLBACK_ERROR_MESSAGE_INTERNAL,
+        metadata: { error: true, details: error.message }
+      };
     }
   }
 
-  // Get conversation history
-  async getConversation(userId: string, conversationId: string): Promise<ChatMessage[]> {
+  async getConversation(userId: string, conversationId: string): Promise<UIChatMessage[]> {
+    const [convoCheck] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)))
+      .limit(1);
+    if (!convoCheck) {
+      throw new Error('Conversation not found or access denied.');
+    }
+
     const history = await db
       .select()
-      .from(messages)
-      .where(eq(messages.conversationId, conversationId))
-      .orderBy(messages.createdAt);
+      .from(messagesTable)
+      .where(eq(messagesTable.conversationId, conversationId))
+      .orderBy(messagesTable.timestamp);
 
     return history.map((msg) => ({
       id: msg.id,
       role: msg.role as 'user' | 'assistant',
       content: msg.content,
       metadata: msg.metadata as Record<string, any> | undefined,
-      createdAt: msg.createdAt
+      createdAt: msg.timestamp
     }));
   }
 
-  // List user's conversations
   async listConversations(userId: string) {
     return db
-      .select()
+      .select({
+        id: conversations.id,
+        userId: conversations.userId,
+        title: conversations.title,
+        category: conversations.category,
+        createdAt: conversations.createdAt,
+        updatedAt: conversations.updatedAt
+      })
       .from(conversations)
       .where(eq(conversations.userId, userId))
-      .orderBy(conversations.updatedAt);
+      .orderBy(desc(conversations.updatedAt));
   }
 
-  // Delete a conversation
-  async deleteConversation(userId: string, conversationId: string) {
+  async deleteConversation(userId: string, conversationId: string): Promise<void> {
     const [conversation] = await db
-      .select()
+      .select({ id: conversations.id })
       .from(conversations)
-      .where(eq(conversations.id, conversationId) && eq(conversations.userId, userId))
+      .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)))
       .limit(1);
 
     if (!conversation) {
-      throw new Error('Conversation not found or unauthorized');
+      throw new Error('Conversation not found or unauthorized to delete.');
     }
-
-    // Get all message IDs for this conversation
-    const messageIds = await db
-      .select({ id: messages.id })
-      .from(messages)
-      .where(eq(messages.conversationId, conversationId));
-
-    // Delete associated messages and embeddings
-    await Promise.all([
-      db.delete(messages).where(eq(messages.conversationId, conversationId)),
-      ...messageIds.map(({ id }) => embeddingsService.deleteEmbedding(id))
-    ]);
-
+    await db.delete(messagesTable).where(eq(messagesTable.conversationId, conversationId));
     await db.delete(conversations).where(eq(conversations.id, conversationId));
   }
 }

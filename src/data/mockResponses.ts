@@ -43,7 +43,7 @@ export const mockConversations = [
   {
     id: '1',
     title: 'Switch Recommendation Chat',
-    userId: 'test-user',
+    userId: '8d813d95-a003-4d6a-8066-ea2d510f4a82',
     category: 'recommendation',
     createdAt: new Date('2024-01-01'),
     updatedAt: new Date('2024-01-01')
@@ -51,7 +51,7 @@ export const mockConversations = [
   {
     id: '2',
     title: 'Switch Comparison Discussion',
-    userId: 'test-user',
+    userId: '8d813d95-a003-4d6a-8066-ea2d510f4a82',
     category: 'comparison',
     createdAt: new Date('2024-01-02'),
     updatedAt: new Date('2024-01-02')

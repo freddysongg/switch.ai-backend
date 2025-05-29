@@ -1,20 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 
-// Extend Request type to include user
-interface AuthenticatedRequest extends Request {
-  user?: {
-    id: string;
-    email: string;
-    role: string;
-  };
-}
-
 // For development, always return a test user
-export const authMiddleware = async (
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-) => {
+export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   try {
     // const token = req.headers.authorization?.split(' ')[1];
     // if (!token) {
@@ -30,8 +17,8 @@ export const authMiddleware = async (
 
     // Add test user to request
     req.user = {
-      id: 'test-user',
-      email: 'test@example.com',
+      id: '8d813d95-a003-4d6a-8066-ea2d510f4a82',
+      email: 'switchai@example.com',
       role: 'authenticated'
     };
 

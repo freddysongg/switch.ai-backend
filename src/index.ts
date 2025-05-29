@@ -3,7 +3,7 @@ import * as dotenv from 'dotenv';
 import express from 'express';
 
 import { ASCII_LOGO, SERVER_READY } from './config/ascii';
-import { errorHandler } from './middleware';
+import { errorHandler } from './middleware/error';
 import router from './routes';
 
 dotenv.config({ path: '.env.local' });
@@ -18,7 +18,7 @@ app.use(cors());
 app.use(express.json());
 
 // Routes
-app.use('/api/v1', router);
+app.use('/api', router);
 
 // Error handling
 app.use(errorHandler);

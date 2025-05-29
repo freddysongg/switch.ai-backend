@@ -33,8 +33,8 @@ export class HealthController {
 
       // Check LLM
       try {
-        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY || '');
-        const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
         await model.generateContent('test');
         status.llm = 'ok';
       } catch (error) {

@@ -1,4 +1,3 @@
-// Chat interfaces
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -41,4 +40,12 @@ export interface AnalyticsEvent {
   userId?: string;
   eventType: string;
   metadata: Record<string, any>;
+}
+
+export interface User {
+  id: string;
+  app_metadata?: Record<string, any>;
+  user_metadata?: Record<string, any>;
+  aud?: string;
+  created_at?: string;
 }

@@ -7,11 +7,11 @@ import { messageEmbeddings, messages, vectorFromJson } from '../db/schema';
 let genAI: GoogleGenerativeAI | null = null;
 let embeddingModel: GenerativeModel | null = null;
 
-if (process.env.GOOGLE_API_KEY) {
-  genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+if (process.env.GEMINI_API_KEY) {
+  genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   embeddingModel = genAI.getGenerativeModel({ model: 'embedding-001' });
 } else {
-  console.warn('Warning: GOOGLE_API_KEY not defined, embeddings features will be unavailable');
+  console.warn('Warning: GEMINI_API_KEY not defined, embeddings features will be unavailable');
 }
 
 export type SearchResult = Record<string, unknown> & {

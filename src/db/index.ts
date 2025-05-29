@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 
@@ -18,7 +20,7 @@ const client = postgres(process.env.DATABASE_URL, {
     rejectUnauthorized: false
   },
   connection: {
-    application_name: 'switch.ai-backend'
+    application_name: 'switch.ai'
   }
 });
 
@@ -39,5 +41,5 @@ export async function withDb<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 export * from './schema';
-export * from './types';
+export * from '../types/db';
 export * from './errors';
