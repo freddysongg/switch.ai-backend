@@ -14,7 +14,6 @@ export interface Conversation {
   updatedAt: Date;
 }
 
-// Chat request/response interfaces
 export interface ChatRequest {
   message: string;
   conversationId?: string;
@@ -27,7 +26,6 @@ export interface ChatResponse {
   metadata?: Record<string, any>;
 }
 
-// Rate limiting interfaces
 export interface RateLimit {
   userId: string;
   endpoint: string;
@@ -35,7 +33,6 @@ export interface RateLimit {
   resetAt: Date;
 }
 
-// Analytics interfaces
 export interface AnalyticsEvent {
   userId?: string;
   eventType: string;

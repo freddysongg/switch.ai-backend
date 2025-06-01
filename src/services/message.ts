@@ -55,7 +55,6 @@ export class MessageService {
     } catch (error: any) {
       console.error('Error creating message:', error);
       if (error.code === '23503') {
-        // Foreign key violation
         throw new ValidationError(
           `Conversation with ID ${conversationId} or User with ID ${userId} does not exist.`
         );
@@ -136,11 +135,8 @@ export class MessageService {
     if (Object.keys(updateData).length === 0) {
       throw new ValidationError('No update data provided for message.');
     }
-    // Add checks: user can only update their own messages if role is 'user', etc.
-    // For now, we check if the user owns the conversation the message belongs to.
 
     try {
-      // First, verify ownership and get the message's conversationId
       const [originalMessage] = await db
         .select({
           conversationId: messages.conversationId,
@@ -153,17 +149,16 @@ export class MessageService {
 
       if (!originalMessage) return null;
 
-      // Check if the authenticated user actually sent this message, if that's the rule for editing
-      // if (originalMessage.role === 'user' && originalMessage.userId !== userId) {
-      //   throw new AuthError("User is not authorized to update this message.");
-      // }
-      // For generic CRUD, let's ensure user owns the parent conversation
       const ownsConversation = await this.userOwnsConversation(
         userId,
         originalMessage.conversationId
       );
       if (!ownsConversation) {
         throw new AuthError('User not authorized to update messages in this conversation.');
+      }
+
+      if (originalMessage.role === 'user' && originalMessage.userId !== userId) {
+        throw new AuthError('Users can only update their own messages.');
       }
 
       const updatedMessages = await db
@@ -197,15 +192,16 @@ export class MessageService {
 
       if (!originalMessage) return null;
 
-      // if (originalMessage.role === 'user' && originalMessage.userId !== userId) {
-      //   throw new AuthError("User is not authorized to delete this message.");
-      // }
       const ownsConversation = await this.userOwnsConversation(
         userId,
         originalMessage.conversationId
       );
       if (!ownsConversation) {
         throw new AuthError('User not authorized to delete messages in this conversation.');
+      }
+
+      if (originalMessage.role === 'user' && originalMessage.userId !== userId) {
+        throw new AuthError('Users can only delete their own messages.');
       }
 
       const deletedMessages = await db

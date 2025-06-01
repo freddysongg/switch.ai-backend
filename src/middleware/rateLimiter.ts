@@ -4,7 +4,6 @@ import { NextFunction, Request, Response } from 'express';
 import { db } from '../db/index.js';
 import { rateLimits } from '../db/schema.js';
 
-// Rate limits for different user types
 const LIMITS = {
   authenticated: {
     requests: 50, // requests per time window
@@ -23,16 +22,13 @@ const activeBursts = new Map<string, { count: number; timestamp: number }>();
 const ipLimits = new Map<string, { count: number; resetAt: number }>();
 const burstCleanupInterval = 10000; // 10 seconds
 
-// Cleanup expired records
 setInterval(() => {
   const now = Date.now();
-  // Clean up bursts
   for (const [key, data] of activeBursts.entries()) {
     if (now - data.timestamp > 30000) {
       activeBursts.delete(key);
     }
   }
-  // Clean up IP limits
   for (const [ip, data] of ipLimits.entries()) {
     if (now > data.resetAt) {
       ipLimits.delete(ip);
@@ -40,12 +36,10 @@ setInterval(() => {
   }
 }, burstCleanupInterval);
 
-// Helper function to check and update burst count
 const checkBurst = (key: string, burstLimit: number): boolean => {
   const now = Date.now();
   const current = activeBursts.get(key) || { count: 0, timestamp: now };
 
-  // Reset if expired
   if (now - current.timestamp > 30000) {
     current.count = 1;
     current.timestamp = now;
@@ -57,12 +51,10 @@ const checkBurst = (key: string, burstLimit: number): boolean => {
   return current.count <= burstLimit;
 };
 
-// Helper function to check IP-based rate limit
 const checkIpLimit = (ip: string, limit: number, timeWindow: number): boolean => {
   const now = Date.now();
   const current = ipLimits.get(ip) || { count: 0, resetAt: now + timeWindow };
 
-  // Reset if expired
   if (now > current.resetAt) {
     current.count = 1;
     current.resetAt = now + timeWindow;
@@ -82,7 +74,6 @@ export const rateLimiter = async (req: Request, res: Response, next: NextFunctio
     const currentTime = new Date();
     const limits = userId ? LIMITS.authenticated : LIMITS.anonymous;
 
-    // Check burst limit
     const burstKey = userId || clientIp;
     if (!checkBurst(burstKey, limits.burstLimit)) {
       return res.status(429).json({
@@ -127,7 +118,6 @@ export const rateLimiter = async (req: Request, res: Response, next: NextFunctio
         });
       }
 
-      // Increment count
       await db
         .update(rateLimits)
         .set({

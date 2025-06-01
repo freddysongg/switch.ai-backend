@@ -57,12 +57,9 @@ export class GeminiService {
     requestSpecificGenConfig?: Partial<GenerationConfig>
   ): Promise<string> {
     try {
-      // For single-turn, non-chat interactions, generateContent is often more direct.
-      // If using startChat for potential future multi-turn within a single call, it's also fine.
-      // The user's previous version used startChat. Let's stick to that for consistency with their example.
       const chat = this.model.startChat({
-        history: [], // For single prompt, history is empty
-        generationConfig: requestSpecificGenConfig // Allow overriding generation config per request
+        history: [],
+        generationConfig: requestSpecificGenConfig
       });
 
       const result = await chat.sendMessage(prompt);
@@ -72,7 +69,6 @@ export class GeminiService {
       // });
 
       const response = result.response;
-      // const response = result.response;
 
       if (!response) {
         console.warn('Gemini API returned no response object.');
@@ -81,7 +77,6 @@ export class GeminiService {
 
       if (!response.candidates || response.candidates.length === 0) {
         console.warn('Gemini API returned no candidates in response.');
-        // Check for promptFeedback if available and it indicates blockage
         if (response.promptFeedback && response.promptFeedback.blockReason) {
           console.warn(
             `Prompt blocked by Gemini API due to: ${response.promptFeedback.blockReason}`
@@ -106,7 +101,7 @@ export class GeminiService {
 
       const text = (candidate.content?.parts?.map((part) => part.text).join('') || '').trim();
 
-      return text.length > 0 ? text : AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM; // Return fallback if text is empty after trim
+      return text.length > 0 ? text : AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM;
     } catch (error: any) {
       console.error('GeminiService error during generation:', error.message || error);
       return AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM;

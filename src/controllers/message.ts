@@ -1,4 +1,3 @@
-// src/controllers/message.controller.ts
 import { Request, Response } from 'express';
 import { validate as isValidUUID } from 'uuid';
 

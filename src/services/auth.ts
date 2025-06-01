@@ -72,7 +72,6 @@ export class AuthService {
       throw new ValidationError('Email and password are required for login.');
     }
 
-    // Ensure role is selected from the database
     const [user] = await db
       .select({
         id: users.id,
@@ -102,7 +101,6 @@ export class AuthService {
     };
     const token = this.generateToken(userForToken);
 
-    // Return user details without sensitive/unnecessary fields
     const { hashedPassword: _h, ...userToReturn } = user;
 
     return { token, user: userToReturn };

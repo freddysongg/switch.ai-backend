@@ -8,68 +8,93 @@ import {
   switches as switchesTable
 } from '../db/schema.js';
 import { ChatRequest, ChatResponse, ChatMessage as UIChatMessage } from '../types/chat.js';
+import { CharacteristicsComparisonService } from './chat/comparison/characteristics.js';
+import { MaterialComparisonService } from './chat/comparison/materials.js';
+import {
+  ComparisonDataRetrievalResult,
+  ComparisonIntent,
+  ProcessedComparisonRequest,
+  SwitchContextForPrompt
+} from './chat/comparison/types.js';
+import { DataRetrievalService } from './chat/database/dataRetrieval.js';
+// Import refactored services
+import { SwitchQueryService } from './chat/database/switchQuery.js';
 import { LocalEmbeddingService } from './embeddingsLocal.js';
 import { GeminiService } from './gemini.js';
-import { PromptBuilder } from './promptBuilder.js';
-
-interface SwitchContextForPrompt {
-  [key: string]: unknown;
-  name: string;
-  manufacturer: string;
-  type: string | null;
-  spring: string | null;
-  actuationForce: number | null;
-  description_text?: string;
-  similarity?: number;
-}
-
-interface ComparisonIntent {
-  isComparison: boolean;
-  confidence: number;
-  extractedSwitchNames: string[];
-  originalQuery: string;
-}
-
-interface ProcessedComparisonRequest {
-  isValidComparison: boolean;
-  switchesToCompare: string[];
-  userFeedbackMessage?: string;
-  confidence: number;
-  originalQuery: string;
-  processingNote?: string;
-}
-
-interface ComprehensiveSwitchData {
-  name: string;
-  manufacturer: string;
-  type: string | null;
-  topHousing: string | null;
-  bottomHousing: string | null;
-  stem: string | null;
-  mount: string | null;
-  spring: string | null;
-  actuationForce: number | null;
-  bottomForce: number | null;
-  preTravel: number | null;
-  totalTravel: number | null;
-  isFound: boolean;
-  missingFields: string[];
-  matchConfidence?: number; // Embedding similarity score
-  originalQuery: string; // What the user actually typed
-}
-
-interface ComparisonDataRetrievalResult {
-  switchesData: ComprehensiveSwitchData[];
-  allSwitchesFound: boolean;
-  missingSwitches: string[];
-  hasDataGaps: boolean;
-  retrievalNotes: string[];
-}
+import { MaterialContextService } from './materialContext.js';
+import { PromptBuilder, type EnhancedSwitchData } from './promptBuilder.js';
+import { SwitchResolutionService, type SwitchResolutionResult } from './switchResolution.js';
 
 const embeddingService = new LocalEmbeddingService();
 const geminiService = new GeminiService();
 
 export class ChatService {
+  private switchResolutionService: SwitchResolutionService;
+  private materialContextService: MaterialContextService;
+
+  // New refactored services
+  private switchQueryService: SwitchQueryService;
+  private dataRetrievalService: DataRetrievalService;
+  private characteristicsComparisonService: CharacteristicsComparisonService;
+  private materialComparisonService: MaterialComparisonService;
+
+  constructor() {
+    try {
+      // Validate environment variables
+      const geminiApiKey = process.env.GEMINI_API_KEY;
+      if (!geminiApiKey) {
+        console.error(
+          'FATAL: GEMINI_API_KEY environment variable is not set. Enhanced comparison features will be disabled.'
+        );
+        console.error('Please ensure .env.local file contains: GEMINI_API_KEY=your_actual_api_key');
+      }
+
+      // Initialize enhanced services with proper error handling
+      console.log('Initializing ChatService enhanced components...');
+
+      try {
+        this.switchResolutionService = new SwitchResolutionService(geminiApiKey || 'dummy-key');
+        console.log('✓ SwitchResolutionService initialized');
+      } catch (error) {
+        console.error('✗ Failed to initialize SwitchResolutionService:', error);
+        throw new Error(
+          `SwitchResolutionService initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+
+      try {
+        this.materialContextService = new MaterialContextService();
+        console.log('✓ MaterialContextService initialized');
+      } catch (error) {
+        console.error('✗ Failed to initialize MaterialContextService:', error);
+        throw new Error(
+          `MaterialContextService initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+
+      // Initialize new refactored services
+      try {
+        this.switchQueryService = new SwitchQueryService();
+        this.dataRetrievalService = new DataRetrievalService();
+        this.characteristicsComparisonService = new CharacteristicsComparisonService(
+          geminiApiKey || 'dummy-key'
+        );
+        this.materialComparisonService = new MaterialComparisonService();
+        console.log('✓ Refactored comparison services initialized');
+      } catch (error) {
+        console.error('✗ Failed to initialize refactored services:', error);
+        throw new Error(
+          `Refactored services initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+
+      console.log('✓ ChatService fully initialized with enhanced comparison features');
+    } catch (error) {
+      console.error('FATAL: ChatService constructor failed:', error);
+      throw error;
+    }
+  }
+
   private truncateText(text: string, max: number): string {
     if (text.length <= max) return text;
     const cut = text.slice(0, max);
@@ -77,7 +102,12 @@ export class ChatService {
     return (lastSpaceIndex > 0 ? cut.slice(0, lastSpaceIndex) : cut) + '...';
   }
 
-  // Fetches history messages formatted for the prompt builder
+  /**
+   * Fetch conversation history formatted for prompt building
+   *
+   * @param conversationId - ID of the conversation to retrieve history for
+   * @returns Array of role/content message pairs for prompt injection
+   */
   private async getConversationHistoryForPrompt(
     conversationId: string
   ): Promise<Pick<UIChatMessage, 'role' | 'content'>[]> {
@@ -98,8 +128,11 @@ export class ChatService {
   }
 
   /**
-   * Detects if the user query is intended for switch comparison
-   * Strategy combines keyword matching, pattern recognition, and switch name extraction
+   * Enhanced comparison intent detection using AI-powered analysis
+   * Combines pattern recognition with SwitchResolutionService capabilities
+   *
+   * @param userQuery - User's input query to analyze
+   * @returns ComparisonIntent with confidence score and extracted switch names
    */
   private async detectComparisonIntent(userQuery: string): Promise<ComparisonIntent> {
     const query = userQuery.toLowerCase().trim();
@@ -107,7 +140,6 @@ export class ChatService {
     let extractedSwitchNames: string[] = [];
 
     try {
-      // Step 1: Look for explicit comparison keywords
       const comparisonKeywords = [
         'vs',
         'versus',
@@ -130,16 +162,66 @@ export class ChatService {
         confidence += 0.4;
       }
 
-      // Step 2: Use enhanced switch name extraction (with embedding service fallback handling)
       try {
-        extractedSwitchNames = await this.parseAndExtractSwitchNames(userQuery);
-      } catch (embeddingError) {
-        console.warn(
-          'Embedding service failed during switch name extraction, falling back to pattern-only extraction:',
-          embeddingError
+        const availableSwitches = await this.getAllAvailableSwitchNames();
+
+        const resolutionResult = await this.switchResolutionService.resolveSwitches(
+          userQuery,
+          availableSwitches,
+          {
+            enableAiDisambiguation: true,
+            enableBrandCompletion: true,
+            confidenceThresholds: {
+              exact: 0.95,
+              fuzzy: 0.8,
+              embedding: 0.65
+            }
+          }
         );
-        // Fallback to pattern-only extraction without database validation
-        extractedSwitchNames = await this.extractPotentialSwitchNames(userQuery);
+
+        if (resolutionResult.resolvedSwitches.length >= 2) {
+          extractedSwitchNames = resolutionResult.resolvedSwitches.map((s) => s.resolvedName);
+          confidence += 0.5;
+        } else if (resolutionResult.resolvedSwitches.length === 1 && hasComparisonKeyword) {
+          extractedSwitchNames = resolutionResult.resolvedSwitches.map((s) => s.resolvedName);
+          confidence += 0.2;
+        }
+
+        if (resolutionResult.confidence > 0.8) {
+          confidence += 0.1;
+        }
+      } catch (resolutionError) {
+        console.warn(
+          'SwitchResolutionService failed, falling back to legacy extraction:',
+          resolutionError
+        );
+
+        try {
+          extractedSwitchNames =
+            await this.switchQueryService.parseAndExtractSwitchNames(userQuery);
+        } catch (embeddingError) {
+          console.warn(
+            'Embedding service also failed, using pattern-only extraction:',
+            embeddingError
+          );
+          extractedSwitchNames =
+            await this.switchQueryService.extractPotentialSwitchNames(userQuery);
+        }
+
+        try {
+          const validatedSwitches =
+            await this.switchQueryService.validateAndMatchSwitchNames(extractedSwitchNames);
+          if (validatedSwitches.length >= 2) {
+            confidence += 0.3;
+            extractedSwitchNames = validatedSwitches;
+          } else if (validatedSwitches.length === 1 && hasComparisonKeyword) {
+            confidence += 0.1;
+            extractedSwitchNames = validatedSwitches;
+          }
+        } catch (validationError) {
+          console.warn('Database validation failed, using extracted names as-is:', validationError);
+          confidence = confidence * 0.8;
+        }
       }
 
       // Step 3: Look for "X vs Y" or "X versus Y" patterns (additional confidence boost)
@@ -160,29 +242,7 @@ export class ChatService {
         }
       }
 
-      // Step 4: Validate extracted switch names against database (with error handling)
-      let validatedSwitches: string[] = [];
-      try {
-        validatedSwitches = await this.validateAndMatchSwitchNames(extractedSwitchNames);
-      } catch (validationError) {
-        console.warn(
-          'Database validation failed during switch name validation, using extracted names as-is:',
-          validationError
-        );
-        // Use extracted names without validation if database is unavailable
-        validatedSwitches = extractedSwitchNames;
-        // Reduce confidence since we couldn't validate
-        confidence = confidence * 0.8;
-      }
-
-      // Boost confidence if we found valid switches
-      if (validatedSwitches.length >= 2) {
-        confidence += 0.3;
-      } else if (validatedSwitches.length === 1 && hasComparisonKeyword) {
-        confidence += 0.1; // Maybe they mentioned one switch and want to compare with others
-      }
-
-      // Step 5: Additional heuristics
+      // Step 4: Additional heuristics
       // Check for multiple switch manufacturers mentioned
       const manufacturers = [
         'gateron',
@@ -199,30 +259,24 @@ export class ChatService {
         confidence += 0.1;
       }
 
-      // Check for multiple switch types mentioned
-      const switchTypes = ['linear', 'tactile', 'clicky', 'silent'];
-      const mentionedTypes = switchTypes.filter((type) => query.includes(type));
-      if (mentionedTypes.length >= 2) {
-        confidence += 0.1;
-      }
-
-      const isComparison = confidence >= 0.5; // Threshold for considering it a comparison
+      // Ensure confidence doesn't exceed 1.0
+      confidence = Math.min(confidence, 1.0);
 
       return {
-        isComparison,
+        isComparison: confidence >= AI_CONFIG.COMPARISON_CONFIDENCE_THRESHOLD,
         confidence,
-        extractedSwitchNames: validatedSwitches,
+        extractedSwitchNames,
         originalQuery: userQuery
       };
-    } catch (criticalError) {
-      console.error('Critical error in detectComparisonIntent:', criticalError);
-      // Fallback to basic keyword detection only
-      const comparisonKeywords = ['vs', 'versus', 'compare', 'comparison', 'difference', 'better'];
-      const hasKeyword = comparisonKeywords.some((keyword) => query.includes(keyword));
+    } catch (error) {
+      console.error('Error in enhanced comparison intent detection:', error);
 
+      // Ultimate fallback - return basic pattern matching
+      const hasBasicPattern =
+        query.includes('vs') || query.includes('versus') || query.includes('compare');
       return {
-        isComparison: hasKeyword,
-        confidence: hasKeyword ? 0.3 : 0, // Lower confidence due to error
+        isComparison: hasBasicPattern,
+        confidence: hasBasicPattern ? 0.5 : 0.1,
         extractedSwitchNames: [],
         originalQuery: userQuery
       };
@@ -230,522 +284,257 @@ export class ChatService {
   }
 
   /**
-   * Extracts potential switch names from the query using heuristics
+   * Get all available switch names from database for resolution service
    */
-  private async extractPotentialSwitchNames(query: string): Promise<string[]> {
-    const potential: string[] = [];
-
-    // Common switch name patterns (Brand + Name/Type)
-    const switchPatterns = [
-      // Brand + descriptive name patterns
-      /(?:gateron|cherry|kailh|akko|jwk|novelkeys|zeal|holy)\s+[\w\s-]+/gi,
-      // Color-based switch names
-      /(?:red|blue|brown|black|green|yellow|white|silver|gold|pink|purple|orange)\s*(?:switch|switches)?/gi,
-      // Common specific switch names
-      /(?:cream|ink|oil\s*king|banana\s*split|alpaca|tangerine|lavender|silent|tactile|linear|clicky)/gi
-    ];
-
-    for (const pattern of switchPatterns) {
-      const matches = [...query.matchAll(pattern)];
-      for (const match of matches) {
-        const candidate = match[0].trim().replace(/\s*switches?\s*$/i, '');
-        if (candidate.length > 2) {
-          potential.push(candidate);
-        }
-      }
-    }
-
-    return [...new Set(potential)]; // Remove duplicates
+  private async getAllAvailableSwitchNames(): Promise<string[]> {
+    return this.switchQueryService.getAllAvailableSwitchNames();
   }
 
   /**
-   * Enhanced switch name parsing and extraction logic
-   * Handles multiple query formats and extraction strategies
+   * Enhanced comparison processing using comprehensive AI-powered switch resolution
+   * Handles multiple resolution strategies and fallback mechanisms
+   *
+   * @param userQuery - User's comparison query
+   * @returns ProcessedComparisonRequest with resolution results and metadata
    */
-  private async parseAndExtractSwitchNames(userQuery: string): Promise<string[]> {
-    const query = userQuery.toLowerCase().trim();
-    const extractedNames: string[] = [];
+  async processEnhancedComparison(userQuery: string): Promise<ProcessedComparisonRequest> {
+    console.log(`🚀 Starting processEnhancedComparison for query: "${userQuery}"`);
 
-    // Strategy 1: Direct pattern matching for common comparison formats
-    const directPatterns = [
-      // "X vs Y" patterns
-      /(\w[\w\s-]*?)\s+(?:vs|versus)\s+(\w[\w\s-]*?)(?:\s|$|\?|\.|,)/gi,
-      // "compare X and Y" patterns
-      /compare\s+(\w[\w\s-]*?)\s+(?:and|with|to)\s+(\w[\w\s-]*?)(?:\s|$|\?|\.|,)/gi,
-      // "difference between X and Y" patterns
-      /difference\s+between\s+(\w[\w\s-]*?)\s+and\s+(\w[\w\s-]*?)(?:\s|$|\?|\.|,)/gi,
-      // "X or Y" patterns (when comparison keywords are present)
-      /(\w[\w\s-]*?)\s+or\s+(\w[\w\s-]*?)(?:\s|$|\?|\.|,)/gi
-    ];
+    try {
+      // Use SwitchResolutionService for comprehensive switch resolution
+      console.log(`📡 Getting available switches from database...`);
+      const availableSwitches = await this.getAllAvailableSwitchNames();
+      console.log(`📊 Found ${availableSwitches.length} available switches in database`);
 
-    for (const pattern of directPatterns) {
-      const matches = [...query.matchAll(pattern)];
-      for (const match of matches) {
-        if (match[1] && match[2]) {
-          extractedNames.push(match[1].trim(), match[2].trim());
-        }
-      }
-    }
-
-    // Strategy 2: Enhanced brand-based extraction
-    const brandPatterns = [
-      // Comprehensive brand patterns with multiple name formats
-      /(?:gateron)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:cherry)\s+mx\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:cherry)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:kailh)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:akko)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:jwk|durock)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:novelkeys|novel\s*keys)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:zeal|zealios)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:holy)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi
-    ];
-
-    for (const pattern of brandPatterns) {
-      const matches = [...query.matchAll(pattern)];
-      for (const match of matches) {
-        if (match[1]) {
-          const fullName = match[0].replace(/\s+switch$/i, '').trim();
-          extractedNames.push(fullName);
-        }
-      }
-    }
-
-    // Strategy 3: Common switch name recognition (exact matches)
-    const commonSwitches = [
-      // Popular linear switches
-      'gateron oil king',
-      'gateron ink black',
-      'gateron yellow',
-      'gateron red',
-      'gateron black',
-      'cherry mx red',
-      'cherry mx black',
-      'cherry mx silver',
-      'cherry mx speed silver',
-      'kailh red',
-      'kailh black',
-      'kailh speed silver',
-      'akko cs rose red',
-      'akko cs wine red',
-      'akko cs silver',
-      'jwk alpaca',
-      'jwk banana split',
-      'jwk lavender',
-      'novelkeys cream',
-      'novelkeys silk yellow',
-      'novelkeys dry yellow',
-
-      // Popular tactile switches
-      'cherry mx brown',
-      'cherry mx clear',
-      'gateron brown',
-      'gateron g pro brown',
-      'kailh brown',
-      'kailh pro purple',
-      'akko cs lavender purple',
-      'akko cs ocean blue',
-      'holy panda',
-      'glorious panda',
-      'zealios v2',
-      'zilents v2',
-      'durock t1',
-      'durock medium tactile',
-
-      // Popular clicky switches
-      'cherry mx blue',
-      'cherry mx green',
-      'gateron blue',
-      'gateron green',
-      'kailh blue',
-      'kailh white',
-      'kailh pink',
-      'novelkeys sherbet'
-    ];
-
-    for (const switchName of commonSwitches) {
-      if (query.includes(switchName)) {
-        extractedNames.push(switchName);
-      }
-    }
-
-    // Strategy 4: Color-based switch extraction with context
-    const colorPatterns = [
-      /(?:gateron|cherry|kailh|akko)\s+(red|blue|brown|black|green|yellow|white|silver|gold|pink|purple|orange|clear)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(red|blue|brown|black|green|yellow|white|silver|gold|pink|purple|orange|clear)\s+(?:switch|linear|tactile|clicky)(?:\s*$|\s*[,.\?])/gi
-    ];
-
-    for (const pattern of colorPatterns) {
-      const matches = [...query.matchAll(pattern)];
-      for (const match of matches) {
-        extractedNames.push(match[0].replace(/\s+switch$/i, '').trim());
-      }
-    }
-
-    // Strategy 5: Handle quoted or explicitly mentioned switches
-    const quotedSwitches = query.match(/"([^"]+)"/g) || query.match(/'([^']+)'/g);
-    if (quotedSwitches) {
-      for (const quoted of quotedSwitches) {
-        const cleaned = quoted.replace(/['"]/g, '').trim();
-        if (cleaned.length > 2) {
-          extractedNames.push(cleaned);
-        }
-      }
-    }
-
-    // Strategy 6: List detection (switches separated by commas, "and", etc.)
-    if (query.includes(',') || query.includes(' and ')) {
-      const listItems = query
-        .split(/,|\s+and\s+/)
-        .map((item) => item.trim())
-        .filter((item) => item.length > 2)
-        .filter((item) => {
-          // Filter items that look like switch names
-          const switchIndicators = [
-            'switch',
-            'linear',
-            'tactile',
-            'clicky',
-            'mx',
-            'gateron',
-            'cherry',
-            'kailh'
-          ];
-          return (
-            switchIndicators.some((indicator) => item.includes(indicator)) ||
-            /^[a-z\s-]+$/.test(item)
-          ); // Simple alphabetic check
-        });
-
-      extractedNames.push(...listItems);
-    }
-
-    // Clean and deduplicate extracted names
-    const cleanedNames = extractedNames
-      .map((name) => name.trim())
-      .filter((name) => name.length > 2)
-      .filter((name) => !['switch', 'switches', 'linear', 'tactile', 'clicky'].includes(name))
-      .map((name) => name.replace(/\s*switches?\s*$/i, '')) // Remove trailing "switch/switches"
-      .filter((name, index, array) => array.indexOf(name) === index); // Remove duplicates
-
-    return cleanedNames;
-  }
-
-  /**
-   * Validates potential switch names against the database
-   */
-  private async validateSwitchNames(potentialNames: string[]): Promise<string[]> {
-    if (potentialNames.length === 0) return [];
-
-    const validated: string[] = [];
-
-    for (const name of potentialNames) {
-      const cleanName = name.trim();
-      if (cleanName.length < 2) continue;
-
-      // Query database for fuzzy match
-      const results = await db
-        .select({ name: switchesTable.name })
-        .from(switchesTable)
-        .where(sql`LOWER(${switchesTable.name}) LIKE ${'%' + cleanName.toLowerCase() + '%'}`)
-        .limit(1);
-
-      if (results.length > 0) {
-        validated.push(results[0].name);
-      }
-    }
-
-    return [...new Set(validated)]; // Remove duplicates
-  }
-
-  /**
-   * Enhanced validation of potential switch names against the database
-   * Uses multiple matching strategies for better accuracy
-   */
-  private async validateAndMatchSwitchNames(potentialNames: string[]): Promise<string[]> {
-    if (potentialNames.length === 0) return [];
-
-    const validated: string[] = [];
-
-    for (const name of potentialNames) {
-      const cleanName = name.trim().toLowerCase();
-      if (cleanName.length < 2) continue;
-
-      // Strategy 1: Exact match (case insensitive)
-      let results = await db
-        .select({ name: switchesTable.name })
-        .from(switchesTable)
-        .where(sql`LOWER(${switchesTable.name}) = ${cleanName}`)
-        .limit(1);
-
-      if (results.length > 0) {
-        validated.push(results[0].name);
-        continue;
-      }
-
-      // Strategy 2: Contains match (case insensitive)
-      results = await db
-        .select({ name: switchesTable.name })
-        .from(switchesTable)
-        .where(sql`LOWER(${switchesTable.name}) LIKE ${'%' + cleanName + '%'}`)
-        .limit(3);
-
-      if (results.length > 0) {
-        // Find the best match (shortest match is usually most relevant)
-        const bestMatch = results.reduce((best, current) =>
-          current.name.length < best.name.length ? current : best
-        );
-        validated.push(bestMatch.name);
-        continue;
-      }
-
-      // Strategy 3: Word-based matching for compound names
-      const words = cleanName.split(/\s+/).filter((word) => word.length > 2);
-      if (words.length > 1) {
-        const wordConditions = words.map(
-          (word) => sql`LOWER(${switchesTable.name}) LIKE ${'%' + word + '%'}`
-        );
-
-        results = await db
-          .select({ name: switchesTable.name })
-          .from(switchesTable)
-          .where(
-            sql`${wordConditions.reduce((acc, condition, index) =>
-              index === 0 ? condition : sql`${acc} AND ${condition}`
-            )}`
-          )
-          .limit(2);
-
-        if (results.length > 0) {
-          validated.push(results[0].name);
-          continue;
-        }
-      }
-
-      // Strategy 4: Brand + partial name matching
-      const brandMappings = {
-        gateron: ['gateron'],
-        cherry: ['cherry mx', 'cherry'],
-        kailh: ['kailh'],
-        akko: ['akko cs', 'akko'],
-        jwk: ['jwk', 'durock'],
-        novelkeys: ['novelkeys', 'nk'],
-        zeal: ['zealios', 'zilents', 'zeal'],
-        holy: ['holy panda']
-      };
-
-      for (const [brand, dbPrefixes] of Object.entries(brandMappings)) {
-        if (cleanName.includes(brand)) {
-          for (const prefix of dbPrefixes) {
-            results = await db
-              .select({ name: switchesTable.name })
-              .from(switchesTable)
-              .where(sql`LOWER(${switchesTable.name}) LIKE ${prefix.toLowerCase() + '%'}`)
-              .limit(5);
-
-            if (results.length > 0) {
-              // Find the result that best matches the original query
-              const bestMatch =
-                results.find((result) => {
-                  const resultLower = result.name.toLowerCase();
-                  return words.some((word) => resultLower.includes(word));
-                }) || results[0];
-
-              validated.push(bestMatch.name);
-              break;
-            }
+      console.log(`🧠 Calling SwitchResolutionService.resolveSwitches...`);
+      const resolutionResult = await this.switchResolutionService.resolveSwitches(
+        userQuery,
+        availableSwitches,
+        {
+          enableAiDisambiguation: true,
+          enableBrandCompletion: true,
+          confidenceThresholds: {
+            exact: 0.95,
+            fuzzy: 0.8,
+            embedding: 0.65
           }
-          if (validated.length > 0) break;
         }
+      );
+      console.log(`🎯 Switch resolution completed:`, {
+        resolvedCount: resolutionResult.resolvedSwitches.length,
+        confidence: resolutionResult.confidence,
+        method: resolutionResult.resolutionMethod,
+        warnings: resolutionResult.warnings
+      });
+
+      // Check if we have enough switches for comparison
+      // ENHANCED: More intelligent confidence filtering that considers AI fallback capabilities
+      const highConfidenceSwitches = resolutionResult.resolvedSwitches.filter(
+        (s) => s.confidence >= 0.5
+      );
+      const allResolvedSwitches = resolutionResult.resolvedSwitches;
+
+      console.log(`✅ High confidence switches (>= 0.5): ${highConfidenceSwitches.length}`);
+      console.log(`📊 Total resolved switches: ${allResolvedSwitches.length}`);
+      console.log(`🎯 Overall resolution confidence: ${resolutionResult.confidence}`);
+
+      // SMART LOGIC: Decide whether to use all switches or just high-confidence ones
+      let validSwitches = highConfidenceSwitches;
+
+      // If we have AI fallback capabilities and reasonable overall confidence, include all switches
+      if (
+        allResolvedSwitches.length >= 2 &&
+        resolutionResult.confidence >= 0.6 &&
+        highConfidenceSwitches.length >= 1
+      ) {
+        console.log(`🧠 AI fallback conditions met - including all resolved switches`);
+        console.log(`   • Total switches: ${allResolvedSwitches.length} >= 2 ✅`);
+        console.log(`   • Overall confidence: ${resolutionResult.confidence} >= 0.6 ✅`);
+        console.log(`   • High confidence switches: ${highConfidenceSwitches.length} >= 1 ✅`);
+
+        validSwitches = allResolvedSwitches; // Use ALL switches with AI fallback
       }
-    }
 
-    return [...new Set(validated)]; // Remove duplicates
-  }
-
-  /**
-   * Processes comparison requests based on number of identified switches
-   * Handles optimal case (2-3 switches) and provides graceful degradation
-   */
-  private async processVariableSwitchComparison(
-    comparisonIntent: ComparisonIntent
-  ): Promise<ProcessedComparisonRequest> {
-    const { isComparison, extractedSwitchNames, confidence, originalQuery } = comparisonIntent;
-    const switchCount = extractedSwitchNames.length;
-
-    // Case 1: Not a comparison or no switches found
-    if (!isComparison || switchCount === 0) {
-      return {
-        isValidComparison: false,
-        switchesToCompare: [],
-        confidence,
-        originalQuery,
-        userFeedbackMessage:
-          switchCount === 0 && isComparison
-            ? "I detected you want to compare switches, but I couldn't identify specific switch names in your query. Could you please mention the exact switch names you'd like to compare?"
-            : undefined
-      };
-    }
-
-    // Case 2: Only one switch identified
-    if (switchCount === 1) {
-      return {
-        isValidComparison: false,
-        switchesToCompare: extractedSwitchNames,
-        confidence,
-        originalQuery,
-        userFeedbackMessage: `I found "${extractedSwitchNames[0]}" in your query. For a comparison, I need at least two switches. Would you like to specify another switch to compare it with, or would you prefer general information about ${extractedSwitchNames[0]}?`
-      };
-    }
-
-    // Case 3: Optimal range (2-3 switches) - Perfect for comparison
-    if (switchCount >= 2 && switchCount <= 3) {
-      return {
-        isValidComparison: true,
-        switchesToCompare: extractedSwitchNames,
-        confidence,
-        originalQuery,
-        processingNote: `Optimal comparison setup with ${switchCount} switches: ${extractedSwitchNames.join(', ')}`
-      };
-    }
-
-    // Case 4: Too many switches (4+) - Apply intelligent filtering
-    if (switchCount >= 4) {
-      const filteredSwitches = await this.intelligentSwitchFiltering(
-        extractedSwitchNames,
-        originalQuery
+      console.log(
+        `🎯 Final switches for comparison: ${validSwitches.length} (${validSwitches.map((s) => `${s.resolvedName}:${s.confidence}`).join(', ')})`
       );
 
+      // NEW: Check if this is a material-based comparison when no specific switches found
+      if (validSwitches.length < 2) {
+        console.log(`🔍 Checking for material-based comparison intent...`);
+
+        // Extract material comparison intent from resolution result
+        const intentResult = resolutionResult.intentParseResult;
+        console.log(`📊 Intent analysis:`, {
+          comparisonType: intentResult?.queryContext?.comparisonType,
+          preferences: intentResult?.queryContext?.preferences,
+          confidence: intentResult?.confidence
+        });
+
+        if (
+          intentResult?.queryContext?.comparisonType === 'materials' &&
+          intentResult?.queryContext?.preferences &&
+          intentResult.queryContext.preferences.length >= 2
+        ) {
+          console.log(`🧪 Material comparison detected - starting comprehensive analysis...`);
+          const materialPreferences = intentResult.queryContext.preferences;
+
+          try {
+            return await this.materialComparisonService.processMaterialComparison(
+              materialPreferences,
+              userQuery,
+              intentResult.confidence
+            );
+          } catch (materialError) {
+            console.warn('Failed to process material comparison:', materialError);
+            // Continue to regular insufficient switches logic
+          }
+        }
+
+        // NEW: Check if this is a characteristics-based comparison (like smooth vs clicky)
+        // Enhanced detection: check preferences OR extract from intendedSwitches
+        let characteristicsToAnalyze: string[] = [];
+
+        if (intentResult?.queryContext?.comparisonType === 'characteristics') {
+          console.log(`🎯 Characteristics comparison type detected`);
+
+          // Method 1: Use preferences if available
+          if (
+            intentResult?.queryContext?.preferences &&
+            intentResult.queryContext.preferences.length >= 2
+          ) {
+            characteristicsToAnalyze = intentResult.queryContext.preferences;
+            console.log(`📋 Using preferences array: ${characteristicsToAnalyze.join(', ')}`);
+          }
+          // Method 2: Extract characteristics from intendedSwitches
+          else if (intentResult?.intendedSwitches && intentResult.intendedSwitches.length >= 2) {
+            characteristicsToAnalyze = this.extractCharacteristicsFromSwitchNames(
+              intentResult.intendedSwitches
+            );
+            console.log(
+              `🔍 Extracted characteristics from intended switches: ${characteristicsToAnalyze.join(', ')}`
+            );
+          }
+          // Method 3: Extract from the resolved switches themselves
+          else if (resolutionResult.resolvedSwitches.length >= 1) {
+            characteristicsToAnalyze = this.extractCharacteristicsFromQuery(userQuery);
+            console.log(
+              `🎯 Extracted characteristics from user query: ${characteristicsToAnalyze.join(', ')}`
+            );
+          }
+        }
+
+        // If we have characteristics to analyze, proceed with characteristics explanation
+        if (characteristicsToAnalyze.length >= 2) {
+          console.log(`🎯 Characteristics explanation detected - starting AI-powered analysis...`);
+          console.log(`📚 Characteristics to explain: ${characteristicsToAnalyze.join(' vs ')}`);
+
+          try {
+            return await this.characteristicsComparisonService.processCharacteristicsComparison(
+              characteristicsToAnalyze,
+              userQuery,
+              Math.max(intentResult?.confidence || 0.8, 0.85) // Boost confidence for characteristics
+            );
+          } catch (characteristicsError) {
+            console.warn('Failed to process characteristics comparison:', characteristicsError);
+            // Continue to enhanced fallback logic below
+          }
+        }
+
+        // ENHANCED: Even with insufficient database matches, try characteristics explanation
+        if (
+          intentResult?.queryContext?.comparisonType === 'characteristics' ||
+          this.isLikelyCharacteristicsQuery(userQuery)
+        ) {
+          console.log(
+            `🧠 Detected characteristics query even with insufficient DB matches - using AI knowledge`
+          );
+
+          const extractedCharacteristics = this.extractCharacteristicsFromQuery(userQuery);
+          if (extractedCharacteristics.length >= 2) {
+            console.log(
+              `🎓 Proceeding with AI-powered characteristics explanation: ${extractedCharacteristics.join(' vs ')}`
+            );
+
+            try {
+              return await this.characteristicsComparisonService.processCharacteristicsComparison(
+                extractedCharacteristics,
+                userQuery,
+                0.85 // High confidence for AI-powered characteristics explanation
+              );
+            } catch (error) {
+              console.warn('AI-powered characteristics explanation failed:', error);
+              // Continue to traditional error handling
+            }
+          }
+        }
+
+        console.log(`⚠️ Insufficient valid switches for comparison`);
+
+        // NEW: Check for partial AI fallback opportunity
+        // If we have at least 1 valid switch and some resolved switches, try partial AI fallback
+        if (validSwitches.length >= 1 && resolutionResult.resolvedSwitches.length >= 2) {
+          console.log(
+            `🤖 Attempting partial AI fallback with ${validSwitches.length} database switch(es) and ${resolutionResult.resolvedSwitches.length - validSwitches.length} AI switch(es)`
+          );
+
+          // Extract all requested switches from resolution result
+          const allRequestedSwitches = resolutionResult.resolvedSwitches.map((s) => s.resolvedName);
+
+          return {
+            isValidComparison: true,
+            switchesToCompare: allRequestedSwitches, // Include ALL switches for AI fallback
+            confidence: resolutionResult.confidence,
+            originalQuery: userQuery,
+            resolutionResult,
+            processingNote: `Partial AI fallback: ${validSwitches.length} database + ${allRequestedSwitches.length - validSwitches.length} AI knowledge`
+          };
+        }
+
+        // If no AI fallback possible, provide user feedback
+        let userFeedbackMessage = "I couldn't identify enough switches for a comparison. ";
+
+        if (validSwitches.length === 1) {
+          userFeedbackMessage += `I found "${validSwitches[0].resolvedName}" but need at least one more switch to compare. `;
+        }
+
+        if (resolutionResult.warnings.length > 0) {
+          userFeedbackMessage +=
+            '\n\nIssues detected:\n' + resolutionResult.warnings.map((w) => `• ${w}`).join('\n');
+        }
+
+        userFeedbackMessage +=
+          "\n\nCould you please specify which switches you'd like me to compare? You can use full names like 'Cherry MX Red' or 'Gateron Oil King'.";
+
+        return {
+          isValidComparison: false,
+          switchesToCompare: validSwitches.map((s) => s.resolvedName),
+          userFeedbackMessage,
+          confidence: resolutionResult.confidence,
+          originalQuery: userQuery,
+          resolutionResult,
+          processingNote: `Resolution method: ${resolutionResult.resolutionMethod}`
+        };
+      }
+
+      // Successful resolution
+      console.log(`🎉 Successful resolution - returning valid comparison request`);
       return {
         isValidComparison: true,
-        switchesToCompare: filteredSwitches,
-        confidence: confidence * 0.9, // Slightly reduce confidence due to filtering
-        originalQuery,
-        userFeedbackMessage: `I found ${switchCount} switches in your query (${extractedSwitchNames.join(', ')}). For the best comparison experience, I'll focus on the most relevant ${filteredSwitches.length}: ${filteredSwitches.join(', ')}. If you'd prefer a different selection, please let me know!`,
-        processingNote: `Filtered from ${switchCount} to ${filteredSwitches.length} switches for optimal comparison`
+        switchesToCompare: validSwitches.map((s) => s.resolvedName),
+        confidence: resolutionResult.confidence,
+        originalQuery: userQuery,
+        resolutionResult,
+        processingNote: `Resolved ${validSwitches.length} switches using ${resolutionResult.resolutionMethod} method`
       };
+    } catch (error) {
+      console.error('❌ Enhanced comparison processing failed:', error);
+      console.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+
+      // Fallback to legacy comparison processing
+      console.log(`🔄 Falling back to legacy comparison processing...`);
+      return this.processComparisonQuery(userQuery);
     }
-
-    // Fallback case (shouldn't reach here, but safety net)
-    return {
-      isValidComparison: false,
-      switchesToCompare: extractedSwitchNames,
-      confidence,
-      originalQuery,
-      userFeedbackMessage:
-        'I encountered an unexpected issue processing your comparison request. Please try rephrasing your query.'
-    };
-  }
-
-  /**
-   * Intelligent filtering for when too many switches are identified
-   * Prioritizes based on query context, switch popularity, and diversity
-   */
-  private async intelligentSwitchFiltering(
-    allSwitches: string[],
-    originalQuery: string
-  ): Promise<string[]> {
-    const targetCount = 3; // Always aim for 3 switches when filtering down
-
-    if (allSwitches.length <= targetCount) {
-      return allSwitches;
-    }
-
-    // Strategy 1: Priority scoring based on multiple factors
-    const scoredSwitches = await Promise.all(
-      allSwitches.map(async (switchName) => {
-        let score = 0;
-        const lowerQuery = originalQuery.toLowerCase();
-        const lowerSwitch = switchName.toLowerCase();
-
-        // Factor 1: Position in query (earlier mentioned = higher priority)
-        const position = lowerQuery.indexOf(lowerSwitch);
-        if (position !== -1) {
-          score += (1000 - position) / 10; // Earlier = higher score
-        }
-
-        // Factor 2: Explicit mention context (vs, compare, etc.)
-        const comparisonContext = [
-          `${lowerSwitch} vs`,
-          `${lowerSwitch} versus`,
-          `compare ${lowerSwitch}`,
-          `${lowerSwitch} or`,
-          `${lowerSwitch} and`,
-          `between ${lowerSwitch}`
-        ];
-        if (comparisonContext.some((pattern) => lowerQuery.includes(pattern))) {
-          score += 50;
-        }
-
-        // Factor 3: Switch type diversity bonus
-        const switchData = await db
-          .select({ type: switchesTable.type, manufacturer: switchesTable.manufacturer })
-          .from(switchesTable)
-          .where(eq(switchesTable.name, switchName))
-          .limit(1);
-
-        if (switchData.length > 0) {
-          // Bonus for having different types (linear, tactile, clicky)
-          score += 10;
-        }
-
-        return { switchName, score };
-      })
-    );
-
-    // Strategy 2: Ensure type diversity if possible
-    const typeGroups = {
-      linear: [] as string[],
-      tactile: [] as string[],
-      clicky: [] as string[]
-    };
-
-    for (const { switchName } of scoredSwitches) {
-      const switchData = await db
-        .select({ type: switchesTable.type })
-        .from(switchesTable)
-        .where(eq(switchesTable.name, switchName))
-        .limit(1);
-
-      if (switchData.length > 0 && switchData[0].type) {
-        const type = switchData[0].type.toLowerCase();
-        if (type.includes('linear')) {
-          typeGroups.linear.push(switchName);
-        } else if (type.includes('tactile')) {
-          typeGroups.tactile.push(switchName);
-        } else if (type.includes('clicky')) {
-          typeGroups.clicky.push(switchName);
-        }
-      }
-    }
-
-    // Strategy 3: Smart selection with diversity
-    const selected: string[] = [];
-    const sortedSwitches = scoredSwitches.sort((a, b) => b.score - a.score);
-
-    // First, try to get one from each type if available
-    const typeOrder = ['linear', 'tactile', 'clicky'] as const;
-    for (const type of typeOrder) {
-      if (typeGroups[type].length > 0 && selected.length < targetCount) {
-        // Get the highest scoring switch of this type
-        const bestOfType = sortedSwitches.find(
-          (s) => typeGroups[type].includes(s.switchName) && !selected.includes(s.switchName)
-        );
-        if (bestOfType) {
-          selected.push(bestOfType.switchName);
-        }
-      }
-    }
-
-    // Fill remaining slots with highest scoring switches
-    for (const { switchName } of sortedSwitches) {
-      if (selected.length >= targetCount) break;
-      if (!selected.includes(switchName)) {
-        selected.push(switchName);
-      }
-    }
-
-    return selected.slice(0, targetCount);
   }
 
   /**
@@ -753,13 +542,8 @@ export class ChatService {
    * Integrates comparison detection and variable switch handling
    */
   async processComparisonQuery(userQuery: string): Promise<ProcessedComparisonRequest> {
-    // Step 1: Detect comparison intent and extract switches
-    const comparisonIntent = await this.detectComparisonIntent(userQuery);
-
-    // Step 2: Process the variable number of switches
-    const processedRequest = await this.processVariableSwitchComparison(comparisonIntent);
-
-    return processedRequest;
+    // Use enhanced comparison processing directly
+    return this.processEnhancedComparison(userQuery);
   }
 
   /**
@@ -769,300 +553,7 @@ export class ChatService {
   private async retrieveComprehensiveSwitchData(
     switchNames: string[]
   ): Promise<ComparisonDataRetrievalResult> {
-    const switchesData: ComprehensiveSwitchData[] = [];
-    const missingSwitches: string[] = [];
-    const retrievalNotes: string[] = [];
-
-    // Check for empty input
-    if (switchNames.length === 0) {
-      return {
-        switchesData: [],
-        allSwitchesFound: false,
-        missingSwitches: [],
-        hasDataGaps: false,
-        retrievalNotes: ['No switch names provided for retrieval']
-      };
-    }
-
-    let embeddingServiceAvailable = true;
-    let databaseAvailable = true;
-
-    for (const switchName of switchNames) {
-      try {
-        let matchResults: any[] = [];
-        let matchConfidence = 0;
-
-        // Strategy 1: Try embedding-based matching if service is available
-        if (embeddingServiceAvailable) {
-          try {
-            const switchEmbedding = await embeddingService.embedText(switchName);
-            const switchEmbeddingSql = arrayToVector(switchEmbedding);
-
-            // Find the best matching switch using embedding similarity
-            matchResults = await db.execute<{
-              name: string;
-              manufacturer: string;
-              type: string | null;
-              topHousing: string | null;
-              bottomHousing: string | null;
-              stem: string | null;
-              mount: string | null;
-              spring: string | null;
-              actuationForce: number | null;
-              bottomForce: number | null;
-              preTravel: number | null;
-              totalTravel: number | null;
-              similarity: number;
-            }>(sql`
-              SELECT 
-                s.name,
-                s.manufacturer,
-                s.type,
-                s.top_housing as "topHousing",
-                s.bottom_housing as "bottomHousing", 
-                s.stem,
-                s.mount,
-                s.spring,
-                s.actuation_force as "actuationForce",
-                s.bottom_force as "bottomForce",
-                s.pre_travel as "preTravel",
-                s.total_travel as "totalTravel",
-                1 - ((s.embedding::text)::vector <=> ${switchEmbeddingSql}) AS similarity
-              FROM ${switchesTable} AS s
-              ORDER BY similarity DESC
-              LIMIT 1
-            `);
-
-            if (matchResults.length > 0) {
-              matchConfidence = matchResults[0].similarity;
-            }
-          } catch (embeddingError) {
-            console.warn(
-              `Embedding service failed for switch "${switchName}", falling back to direct matching:`,
-              embeddingError
-            );
-            embeddingServiceAvailable = false;
-            // Continue to fallback strategy below
-          }
-        }
-
-        // Strategy 2: Fallback to direct name matching if embedding failed
-        if (!embeddingServiceAvailable || matchResults.length === 0) {
-          try {
-            matchResults = await db.execute<{
-              name: string;
-              manufacturer: string;
-              type: string | null;
-              topHousing: string | null;
-              bottomHousing: string | null;
-              stem: string | null;
-              mount: string | null;
-              spring: string | null;
-              actuationForce: number | null;
-              bottomForce: number | null;
-              preTravel: number | null;
-              totalTravel: number | null;
-              similarity: number;
-            }>(sql`
-              SELECT 
-                s.name,
-                s.manufacturer,
-                s.type,
-                s.top_housing as "topHousing",
-                s.bottom_housing as "bottomHousing", 
-                s.stem,
-                s.mount,
-                s.spring,
-                s.actuation_force as "actuationForce",
-                s.bottom_force as "bottomForce",
-                s.pre_travel as "preTravel",
-                s.total_travel as "totalTravel",
-                CASE 
-                  WHEN LOWER(s.name) = LOWER(${switchName}) THEN 1.0
-                  WHEN LOWER(s.name) LIKE LOWER(${'%' + switchName + '%'}) THEN 0.8
-                  ELSE 0.6
-                END AS similarity
-              FROM ${switchesTable} AS s
-              WHERE LOWER(s.name) LIKE LOWER(${'%' + switchName + '%'})
-              ORDER BY similarity DESC
-              LIMIT 1
-            `);
-
-            if (matchResults.length > 0) {
-              matchConfidence = matchResults[0].similarity;
-              retrievalNotes.push(
-                `Used direct name matching for "${switchName}" (embedding service unavailable)`
-              );
-            }
-          } catch (dbError) {
-            console.error(`Database query failed for switch "${switchName}":`, dbError);
-            databaseAvailable = false;
-            // Continue to handle database unavailability below
-          }
-        }
-
-        // Handle database unavailability
-        if (!databaseAvailable || matchResults.length === 0) {
-          missingSwitches.push(switchName);
-          switchesData.push({
-            name: switchName,
-            manufacturer: '',
-            type: null,
-            topHousing: null,
-            bottomHousing: null,
-            stem: null,
-            mount: null,
-            spring: null,
-            actuationForce: null,
-            bottomForce: null,
-            preTravel: null,
-            totalTravel: null,
-            isFound: false,
-            missingFields: ['all'],
-            matchConfidence: 0,
-            originalQuery: switchName
-          });
-
-          if (!databaseAvailable) {
-            retrievalNotes.push(`Database unavailable for switch "${switchName}"`);
-          } else {
-            retrievalNotes.push(`No matches found in database for "${switchName}"`);
-          }
-          continue;
-        }
-
-        const bestMatch = matchResults[0];
-
-        // Check confidence threshold
-        const confidenceThreshold = 0.5;
-        if (matchConfidence < confidenceThreshold) {
-          missingSwitches.push(switchName);
-          switchesData.push({
-            name: switchName,
-            manufacturer: '',
-            type: null,
-            topHousing: null,
-            bottomHousing: null,
-            stem: null,
-            mount: null,
-            spring: null,
-            actuationForce: null,
-            bottomForce: null,
-            preTravel: null,
-            totalTravel: null,
-            isFound: false,
-            missingFields: ['all'],
-            matchConfidence,
-            originalQuery: switchName
-          });
-          retrievalNotes.push(
-            `Low confidence match for "${switchName}" (best match: "${bestMatch.name}" with ${(matchConfidence * 100).toFixed(1)}% confidence)`
-          );
-          continue;
-        }
-
-        // Process successful match
-        const missingFields: string[] = [];
-        const requiredFields = [
-          'manufacturer',
-          'type',
-          'topHousing',
-          'bottomHousing',
-          'stem',
-          'mount',
-          'spring',
-          'actuationForce',
-          'bottomForce',
-          'preTravel',
-          'totalTravel'
-        ];
-
-        for (const field of requiredFields) {
-          const value = bestMatch[field as keyof typeof bestMatch];
-          if (value === null || value === undefined || value === '') {
-            missingFields.push(field);
-          }
-        }
-
-        switchesData.push({
-          name: bestMatch.name,
-          manufacturer: bestMatch.manufacturer,
-          type: bestMatch.type,
-          topHousing: bestMatch.topHousing,
-          bottomHousing: bestMatch.bottomHousing,
-          stem: bestMatch.stem,
-          mount: bestMatch.mount,
-          spring: bestMatch.spring,
-          actuationForce: bestMatch.actuationForce,
-          bottomForce: bestMatch.bottomForce,
-          preTravel: bestMatch.preTravel,
-          totalTravel: bestMatch.totalTravel,
-          isFound: true,
-          missingFields,
-          matchConfidence,
-          originalQuery: switchName
-        });
-
-        const confidencePercent = (matchConfidence * 100).toFixed(1);
-        const matchType = embeddingServiceAvailable ? 'embedding' : 'direct name';
-        if (bestMatch.name.toLowerCase() === switchName.toLowerCase()) {
-          retrievalNotes.push(`Exact match found for "${switchName}" using ${matchType} matching`);
-        } else {
-          retrievalNotes.push(
-            `Matched "${switchName}" to "${bestMatch.name}" using ${matchType} matching (${confidencePercent}% confidence)${
-              missingFields.length > 0
-                ? ` - missing data for: ${missingFields.join(', ')}`
-                : ' with complete data'
-            }`
-          );
-        }
-      } catch (criticalError) {
-        console.error(`Critical error retrieving data for switch "${switchName}":`, criticalError);
-        missingSwitches.push(switchName);
-        switchesData.push({
-          name: switchName,
-          manufacturer: '',
-          type: null,
-          topHousing: null,
-          bottomHousing: null,
-          stem: null,
-          mount: null,
-          spring: null,
-          actuationForce: null,
-          bottomForce: null,
-          preTravel: null,
-          totalTravel: null,
-          isFound: false,
-          missingFields: ['all'],
-          matchConfidence: 0,
-          originalQuery: switchName
-        });
-        retrievalNotes.push(
-          `Critical error retrieving data for switch "${switchName}": ${criticalError instanceof Error ? criticalError.message : 'Unknown error'}`
-        );
-      }
-    }
-
-    const allSwitchesFound = missingSwitches.length === 0;
-    const hasDataGaps = switchesData.some((s) => s.missingFields.length > 0);
-
-    // Add system status notes if there were service failures
-    if (!embeddingServiceAvailable) {
-      retrievalNotes.unshift(
-        'Note: Embedding service was unavailable, used direct name matching as fallback'
-      );
-    }
-    if (!databaseAvailable) {
-      retrievalNotes.unshift('Warning: Database connection issues detected during retrieval');
-    }
-
-    return {
-      switchesData,
-      allSwitchesFound,
-      missingSwitches,
-      hasDataGaps,
-      retrievalNotes
-    };
+    return this.dataRetrievalService.retrieveComprehensiveSwitchData(switchNames);
   }
 
   /**
@@ -1075,82 +566,309 @@ export class ChatService {
     hasIncompleteData: boolean;
     promptInstructions: string;
   } {
-    const { switchesData, missingSwitches, hasDataGaps, allSwitchesFound } = retrievalResult;
+    return this.dataRetrievalService.formatMissingDataForPrompt(retrievalResult);
+  }
 
-    // Build individual switch data blocks for the prompt
-    const switchDataBlocks: string[] = [];
-
-    for (const switchData of switchesData) {
-      if (switchData.isFound) {
-        // Format available data for found switches
-        let dataBlock = `SWITCH_NAME: ${switchData.name}\n`;
-        dataBlock += `MANUFACTURER: ${switchData.manufacturer || 'N/A'}\n`;
-        dataBlock += `TYPE: ${switchData.type || 'N/A'}\n`;
-        dataBlock += `TOP_HOUSING: ${switchData.topHousing || 'N/A'}\n`;
-        dataBlock += `BOTTOM_HOUSING: ${switchData.bottomHousing || 'N/A'}\n`;
-        dataBlock += `STEM: ${switchData.stem || 'N/A'}\n`;
-        dataBlock += `MOUNT: ${switchData.mount || 'N/A'}\n`;
-        dataBlock += `SPRING: ${switchData.spring || 'N/A'}\n`;
-        dataBlock += `ACTUATION_FORCE_G: ${switchData.actuationForce !== null ? switchData.actuationForce : 'N/A'}\n`;
-        dataBlock += `BOTTOM_OUT_FORCE_G: ${switchData.bottomForce !== null ? switchData.bottomForce : 'N/A'}\n`;
-        dataBlock += `PRE_TRAVEL_MM: ${switchData.preTravel !== null ? switchData.preTravel : 'N/A'}\n`;
-        dataBlock += `TOTAL_TRAVEL_MM: ${switchData.totalTravel !== null ? switchData.totalTravel : 'N/A'}\n`;
-
-        if (switchData.matchConfidence && switchData.matchConfidence < 1.0) {
-          dataBlock += `MATCH_CONFIDENCE: ${(switchData.matchConfidence * 100).toFixed(1)}% (matched "${switchData.originalQuery}" to "${switchData.name}")\n`;
-        }
-
-        if (switchData.missingFields.length > 0) {
-          dataBlock += `MISSING_FIELDS_NOTE: Data not available for: ${switchData.missingFields.join(', ')}\n`;
-        }
-
-        switchDataBlocks.push(dataBlock);
-      } else {
-        // Handle switches not found in database
-        switchDataBlocks.push(
-          `SWITCH_NAME: ${switchData.originalQuery}\n` +
-            `DATABASE_STATUS: Not found in database\n` +
-            `NOTE: This switch was not found in our database. General knowledge may be used if available.\n`
-        );
+  /**
+   * Build educational prompt for characteristics explanation
+   */
+  private buildCharacteristicsEducationPrompt(
+    historyForPrompt: Pick<UIChatMessage, 'role' | 'content'>[],
+    userQuery: string,
+    characteristicsExamples: Record<string, any[]>,
+    processingNote: string
+  ): string {
+    // Build examples section
+    let examplesSection = '';
+    for (const [characteristic, switches] of Object.entries(characteristicsExamples)) {
+      if (switches.length > 0) {
+        examplesSection += `\n**${characteristic.toUpperCase()} EXAMPLES:**\n`;
+        switches.forEach((sw: any) => {
+          examplesSection += `- ${sw.name} (${sw.manufacturer}) - ${sw.type || 'Unknown type'}${sw.actuationForce ? `, ${sw.actuationForce}g` : ''}\n`;
+        });
       }
     }
 
-    // Generate missing data summary
-    let missingDataSummary = '';
-    if (missingSwitches.length > 0) {
-      missingDataSummary += `Missing switches (not in database): ${missingSwitches.join(', ')}. `;
-    }
+    const characteristics = Object.keys(characteristicsExamples);
 
-    const switchesWithMissingFields = switchesData.filter(
-      (s) => s.isFound && s.missingFields.length > 0
-    );
-    if (switchesWithMissingFields.length > 0) {
-      missingDataSummary += `Switches with incomplete data: ${switchesWithMissingFields
-        .map((s) => `${s.name} (missing: ${s.missingFields.join(', ')})`)
-        .join('; ')}. `;
-    }
+    return `You are a mechanical keyboard expert providing EDUCATIONAL CONTENT about switch characteristics. The user wants to understand the differences between: ${characteristics.join(' vs ')}.
 
-    // Generate prompt instructions for handling missing data
-    let promptInstructions = '';
-    if (!allSwitchesFound || hasDataGaps) {
-      promptInstructions = 'MISSING_SWITCH_DATA_NOTE: ';
+User query: "${userQuery}"
 
-      if (missingSwitches.length > 0) {
-        promptInstructions += `${missingSwitches.join(', ')} not found in database - use general knowledge if available and clearly indicate sources. `;
+IMPORTANT: This is NOT a detailed switch comparison. Focus on EXPLAINING THE CHARACTERISTICS THEMSELVES - what they mean, how they're achieved, what materials/mechanisms create these effects, and how they affect the typing experience.
+
+Example switches from our database (use these as brief illustrations, not detailed comparisons):
+${examplesSection}
+
+Structure your response as an educational guide:
+
+## Understanding ${characteristics.join(' vs ')} Characteristics
+
+### What Makes a Switch "${characteristics[0]}"?
+[Explain the characteristic - materials, mechanisms, design principles]
+
+### What Makes a Switch "${characteristics[1] || 'Different'}"?
+[Explain the characteristic - materials, mechanisms, design principles]
+
+### Material Science & Engineering:
+[Explain how housing materials (PC, nylon, POM), stem materials, spring weights, etc. contribute to these characteristics]
+
+### Sound & Feel Differences:
+[Explain how these characteristics translate to actual typing experience]
+
+### Illustrative Examples:
+[Brief mentions of the example switches to demonstrate points, not detailed comparisons]
+
+### Choosing Between These Characteristics:
+[Practical advice for different use cases - gaming, typing, office, etc.]
+
+Focus on EDUCATION about the characteristics themselves. Keep switch mentions brief and illustrative. The goal is to help the user understand what these terms mean and how they're achieved in switch design.`;
+  }
+
+  /**
+   * Build educational prompt for material explanation
+   */
+  private buildMaterialEducationPrompt(
+    historyForPrompt: Pick<UIChatMessage, 'role' | 'content'>[],
+    userQuery: string,
+    materialsToExplain: string[],
+    materialExamples: Record<string, any[]>,
+    processingNote: string
+  ): string {
+    // Build examples section
+    let examplesSection = '';
+    for (const [material, switches] of Object.entries(materialExamples)) {
+      if (switches.length > 0) {
+        examplesSection += `\n**${material.toUpperCase()} EXAMPLES:**\n`;
+        switches.forEach((sw: any) => {
+          const housingInfo = [];
+          if (sw.topHousing) housingInfo.push(`Top: ${sw.topHousing}`);
+          if (sw.bottomHousing) housingInfo.push(`Bottom: ${sw.bottomHousing}`);
+          if (sw.stem) housingInfo.push(`Stem: ${sw.stem}`);
+
+          examplesSection += `- ${sw.name} (${sw.manufacturer})${sw.type ? ` - ${sw.type}` : ''}${sw.actuationForce ? `, ${sw.actuationForce}g` : ''}`;
+          if (housingInfo.length > 0) {
+            examplesSection += ` [${housingInfo.join(', ')}]`;
+          }
+          examplesSection += '\n';
+        });
       }
+    }
 
-      if (hasDataGaps) {
-        promptInstructions +=
-          'Some switches have incomplete database records - mark missing specifications as "N/A" in technical specifications and note in analysis where general knowledge is used.';
+    const historyContext =
+      historyForPrompt.length > 0
+        ? `## Previous Conversation:\n${historyForPrompt.map((msg) => `**${msg.role}:** ${msg.content}`).join('\n\n')}\n\n`
+        : '';
+
+    return `You are a mechanical keyboard expert providing EDUCATIONAL CONTENT about switch housing materials. The user wants to understand the differences between: ${materialsToExplain.join(' vs ')}.
+
+${historyContext}User query: "${userQuery}"
+
+IMPORTANT: This is NOT a detailed switch comparison. Focus on EXPLAINING THE MATERIALS THEMSELVES - what they are, their properties, how they affect sound and feel, and their impact on the typing experience.
+
+Example switches from our database (use these as brief illustrations, not detailed comparisons):
+${examplesSection}
+
+Structure your response as an educational guide:
+
+## Understanding ${materialsToExplain.join(' vs ')} Housing Materials
+
+### ${materialsToExplain[0]} Properties:
+[Explain the material - chemical composition, physical properties, manufacturing considerations]
+- **Sound Profile:** [How this material affects sound - frequency response, resonance, dampening]
+- **Feel Characteristics:** [How this material affects typing feel - firmness, texture, feedback]
+- **Manufacturing:** [How this material is processed and its implications]
+- **Use Cases:** [When this material is preferred and why]
+
+### ${materialsToExplain[1] || 'Alternative Material'} Properties:
+[Explain the material - chemical composition, physical properties, manufacturing considerations]
+- **Sound Profile:** [How this material affects sound - frequency response, resonance, dampening]
+- **Feel Characteristics:** [How this material affects typing feel - firmness, texture, feedback]
+- **Manufacturing:** [How this material is processed and its implications]
+- **Use Cases:** [When this material is preferred and why]
+
+### Material Science & Engineering:
+[Explain the physics and engineering behind how these materials create different experiences]
+- **Acoustic Properties:** [How molecular structure affects sound transmission and dampening]
+- **Mechanical Properties:** [How material hardness, flexibility, and surface texture affect feel]
+- **Durability & Longevity:** [How these materials age and wear over time]
+
+### Sound & Feel Comparison:
+[Direct comparison of how these materials create different typing experiences]
+- **Sound Signature:** [Frequency response, resonance characteristics, volume levels]
+- **Tactile Experience:** [Surface texture, thermal properties, feedback quality]
+- **Performance Characteristics:** [Consistency, temperature stability, long-term performance]
+
+### Real-World Applications:
+[Brief mentions of the example switches to demonstrate material choices, not detailed comparisons]
+
+### Choosing Between These Materials:
+[Practical advice for different use cases - gaming, typing, office, sound preferences, etc.]
+
+Focus on EDUCATION about the materials themselves and their impact on switch performance. Keep switch mentions brief and illustrative. The goal is to help the user understand material science and how it translates to typing experience.`;
+  }
+
+  /**
+   * Build AI-powered comparison prompt when database switches aren't found
+   * Leverages general AI knowledge about mechanical switches
+   */
+  private buildAIFallbackComparisonPrompt(
+    historyForPrompt: Pick<UIChatMessage, 'role' | 'content'>[],
+    requestedSwitches: string[],
+    userQuery: string,
+    resolutionResult?: SwitchResolutionResult
+  ): string {
+    return `
+ROLE: You are a highly knowledgeable mechanical keyboard enthusiast and expert. Provide a detailed, technical comparison of the requested switches.
+
+PREVIOUS CONVERSATION:
+${historyForPrompt.map((msg) => `${msg.role}: ${msg.content}`).join('\n\n')}
+
+USER QUERY: "${userQuery}"
+
+REQUESTED SWITCHES: ${requestedSwitches.join(', ')}
+
+INSTRUCTIONS:
+- Provide a comprehensive technical comparison of these switches
+- Focus on actual switch characteristics: feel, sound, materials, actuation force, use cases
+- Include technical details about housing materials, stem materials, spring weights
+- Provide practical recommendations based on different use cases (gaming, typing, office)
+- Use enthusiast terminology appropriately (thocky, clacky, creamy, scratchy, etc.)
+- Structure your response with clear sections and bullet points
+- Do NOT mention database limitations or data availability
+- Do NOT provide disclaimers about information accuracy
+- Present information confidently as an expert would
+
+Focus on delivering valuable technical insights and practical guidance for mechanical keyboard enthusiasts.
+`;
+  }
+
+  /**
+   * Build partial AI fallback prompt for when we have some switches from DB and some missing
+   * Combines database information with AI knowledge
+   */
+  private buildPartialAIFallbackPrompt(
+    historyForPrompt: Pick<UIChatMessage, 'role' | 'content'>[],
+    foundSwitch: any,
+    missingSwitches: string[],
+    userQuery: string,
+    resolutionResult?: SwitchResolutionResult
+  ): string {
+    return `
+ROLE: You are a highly knowledgeable mechanical keyboard enthusiast and expert. Provide a detailed comparison using both database information and your expert knowledge.
+
+PREVIOUS CONVERSATION:
+${historyForPrompt.map((msg) => `${msg.role}: ${msg.content}`).join('\n\n')}
+
+USER QUERY: "${userQuery}"
+
+DATABASE INFORMATION AVAILABLE:
+**${foundSwitch.name}** (${foundSwitch.manufacturer})
+- Type: ${foundSwitch.type || 'Not specified'}
+- Actuation Force: ${foundSwitch.actuationForce ? foundSwitch.actuationForce + 'g' : 'Not specified'}
+- Top Housing: ${foundSwitch.topHousing || 'Not specified'}
+- Bottom Housing: ${foundSwitch.bottomHousing || 'Not specified'}
+- Stem: ${foundSwitch.stem || 'Not specified'}
+- Description: ${foundSwitch.description || 'No description available'}
+
+SWITCHES TO ANALYZE FROM KNOWLEDGE: ${missingSwitches.join(', ')}
+
+INSTRUCTIONS:
+- Provide a comprehensive technical comparison including both the database switch and the other switches
+- Use the detailed database information for ${foundSwitch.name} as a reference point
+- Apply your expert knowledge for the other switches: ${missingSwitches.join(', ')}
+- Focus on technical characteristics: feel, sound, materials, actuation force, use cases
+- Include practical recommendations based on different use cases (gaming, typing, office)
+- Use enthusiast terminology appropriately (thocky, clacky, creamy, scratchy, etc.)
+- Structure your response with clear sections comparing all switches
+- Do NOT mention database limitations or data availability
+- Do NOT provide disclaimers about information accuracy
+- Present all information confidently as an expert comparison
+
+Focus on delivering valuable technical insights and practical guidance for mechanical keyboard enthusiasts.
+`;
+  }
+
+  /**
+   * Extract characteristics from switch names (e.g., "smooth switches" -> "smooth")
+   */
+  private extractCharacteristicsFromSwitchNames(switchNames: string[]): string[] {
+    const characteristics: string[] = [];
+
+    for (const switchName of switchNames) {
+      const name = switchName.toLowerCase();
+
+      if (name.includes('smooth') || name.includes('linear')) {
+        characteristics.push('smooth');
+      } else if (name.includes('clicky') || name.includes('click')) {
+        characteristics.push('clicky');
+      } else if (name.includes('tactile') || name.includes('bump')) {
+        characteristics.push('tactile');
+      } else if (name.includes('silent') || name.includes('quiet')) {
+        characteristics.push('silent');
+      } else if (name.includes('heavy') || name.includes('light')) {
+        characteristics.push(name.includes('heavy') ? 'heavy' : 'light');
+      } else if (name.includes('fast') || name.includes('responsive')) {
+        characteristics.push('fast');
       }
     }
 
-    return {
-      missingDataSummary: missingDataSummary.trim(),
-      switchDataBlocks,
-      hasIncompleteData: !allSwitchesFound || hasDataGaps,
-      promptInstructions: promptInstructions.trim()
-    };
+    return [...new Set(characteristics)]; // Remove duplicates
+  }
+
+  /**
+   * Extract characteristics from user query text
+   */
+  private extractCharacteristicsFromQuery(query: string): string[] {
+    const characteristics: string[] = [];
+    const queryLower = query.toLowerCase();
+
+    // Common characteristic patterns
+    const characteristicPatterns = [
+      { patterns: ['smooth', 'linear', 'butter'], characteristic: 'smooth' },
+      { patterns: ['clicky', 'click', 'loud'], characteristic: 'clicky' },
+      { patterns: ['tactile', 'bump', 'feedback'], characteristic: 'tactile' },
+      { patterns: ['silent', 'quiet', 'dampened'], characteristic: 'silent' },
+      { patterns: ['heavy', 'stiff', 'resistance'], characteristic: 'heavy' },
+      { patterns: ['light', 'easy', 'effortless'], characteristic: 'light' },
+      { patterns: ['fast', 'quick', 'responsive'], characteristic: 'fast' },
+      { patterns: ['thocky', 'deep', 'muted'], characteristic: 'thocky' },
+      { patterns: ['scratchy', 'rough', 'gritty'], characteristic: 'scratchy' }
+    ];
+
+    for (const { patterns, characteristic } of characteristicPatterns) {
+      if (patterns.some((pattern) => queryLower.includes(pattern))) {
+        characteristics.push(characteristic);
+      }
+    }
+
+    return [...new Set(characteristics)]; // Remove duplicates
+  }
+
+  /**
+   * Detect if a query is likely asking about characteristics rather than specific switches
+   */
+  private isLikelyCharacteristicsQuery(query: string): boolean {
+    const queryLower = query.toLowerCase();
+
+    // Characteristic comparison keywords
+    const characteristicKeywords = [
+      'smooth vs',
+      'clicky vs',
+      'tactile vs',
+      'silent vs',
+      'linear vs',
+      'compare smooth',
+      'compare clicky',
+      'compare tactile',
+      'difference between smooth',
+      'difference between clicky',
+      'smooth or clicky',
+      'linear or tactile',
+      'quiet or loud'
+    ];
+
+    return characteristicKeywords.some((keyword) => queryLower.includes(keyword));
   }
 
   /** Full RAG-powered message processing */
@@ -1158,8 +876,15 @@ export class ChatService {
     const rawUserQuery = this.truncateText(request.message, AI_CONFIG.MAX_OUTPUT_TOKENS * 100);
 
     try {
+      console.log(`🔍 Processing message: "${rawUserQuery}"`);
+
       // Step 0: Detect if this is a comparison request
       const comparisonIntent = await this.detectComparisonIntent(rawUserQuery);
+      console.log(`🎯 Comparison intent detected:`, {
+        isComparison: comparisonIntent.isComparison,
+        confidence: comparisonIntent.confidence,
+        extractedSwitches: comparisonIntent.extractedSwitchNames
+      });
 
       // 1) Get or create conversation
       let conversation = await withDb(async () => {
@@ -1186,6 +911,7 @@ export class ChatService {
         return created;
       });
       const currentConversationId = conversation.id;
+      console.log(`💬 Conversation ID: ${currentConversationId}`);
 
       // 2) Save user message
       await db
@@ -1199,18 +925,29 @@ export class ChatService {
           timestamp: new Date()
         })
         .returning();
+      console.log(`💾 User message saved`);
 
       // ROUTE DECISION: Comparison vs Standard RAG
       if (comparisonIntent.isComparison) {
         // ** COMPARISON FLOW **
-        console.log(`Detected comparison intent with confidence: ${comparisonIntent.confidence}`);
+        console.log(
+          `🔧 Entering enhanced comparison flow with confidence: ${comparisonIntent.confidence}`
+        );
 
         try {
           // Process the comparison request through our complete comparison pipeline
-          const comparisonRequest = await this.processComparisonQuery(rawUserQuery);
+          console.log(`⚙️ Calling processEnhancedComparison...`);
+          const comparisonRequest = await this.processEnhancedComparison(rawUserQuery);
+          console.log(`✅ processEnhancedComparison completed:`, {
+            isValid: comparisonRequest.isValidComparison,
+            switchesToCompare: comparisonRequest.switchesToCompare,
+            confidence: comparisonRequest.confidence,
+            processingNote: comparisonRequest.processingNote
+          });
 
           if (!comparisonRequest.isValidComparison) {
             // Handle invalid comparison (e.g., insufficient switches, user feedback needed)
+            console.log(`⚠️ Invalid comparison request - providing user feedback`);
             const assistantText =
               comparisonRequest.userFeedbackMessage ||
               "I couldn't identify enough switches for a comparison. Could you please specify which switches you'd like me to compare?";
@@ -1250,14 +987,241 @@ export class ChatService {
             };
           }
 
+          // ENHANCED: Handle characteristics explanations directly without data retrieval
+          if (
+            comparisonRequest.isCharacteristicsExplanation &&
+            comparisonRequest.characteristicsExamples
+          ) {
+            console.log(
+              `🎓 Characteristics explanation detected - generating educational content directly`
+            );
+            console.log(
+              `📚 Example switches already gathered: ${Object.values(comparisonRequest.characteristicsExamples).flat().length} total examples`
+            );
+
+            try {
+              // Get conversation history
+              const historyForPrompt =
+                await this.getConversationHistoryForPrompt(currentConversationId);
+
+              // Build educational characteristics prompt using the pre-gathered examples
+              const prompt = this.buildCharacteristicsEducationPrompt(
+                historyForPrompt,
+                rawUserQuery,
+                comparisonRequest.characteristicsExamples,
+                comparisonRequest.processingNote || ''
+              );
+
+              // Generate educational content using Gemini
+              const assistantText = await geminiService.generate(prompt);
+
+              // Check if Gemini returned a fallback error message
+              if (assistantText === AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM) {
+                const fallbackText = `I apologize, but I'm having trouble generating the characteristics explanation right now. This could be due to AI service limitations. Please try again in a moment.`;
+
+                const [assistantMsgRecord] = await db
+                  .insert(messagesTable)
+                  .values({
+                    conversationId: currentConversationId,
+                    userId,
+                    content: fallbackText,
+                    role: 'assistant',
+                    metadata: {
+                      model: AI_CONFIG.GEMINI_MODEL,
+                      isComparison: true,
+                      comparisonValid: true,
+                      error: 'llm_generation_failure_characteristics',
+                      characteristicsExplanation: true
+                    },
+                    createdAt: new Date(),
+                    timestamp: new Date()
+                  })
+                  .returning();
+
+                await db
+                  .update(conversations)
+                  .set({ updatedAt: new Date() })
+                  .where(eq(conversations.id, currentConversationId));
+
+                return {
+                  id: assistantMsgRecord.id,
+                  role: 'assistant',
+                  content: fallbackText,
+                  metadata: assistantMsgRecord.metadata as Record<string, any>
+                };
+              }
+
+              // Save successful characteristics explanation
+              const [assistantMsgRecord] = await db
+                .insert(messagesTable)
+                .values({
+                  conversationId: currentConversationId,
+                  userId,
+                  content: assistantText,
+                  role: 'assistant',
+                  metadata: {
+                    model: AI_CONFIG.GEMINI_MODEL,
+                    isComparison: false, // This is education, not comparison
+                    comparisonValid: true,
+                    comparisonConfidence: comparisonRequest.confidence,
+                    characteristicsExplanation: true,
+                    educationalContent: true,
+                    processingNote: comparisonRequest.processingNote,
+                    promptLength: prompt.length,
+                    exampleSwitchesCount: Object.values(
+                      comparisonRequest.characteristicsExamples
+                    ).flat().length
+                  },
+                  createdAt: new Date(),
+                  timestamp: new Date()
+                })
+                .returning();
+
+              await db
+                .update(conversations)
+                .set({ updatedAt: new Date() })
+                .where(eq(conversations.id, currentConversationId));
+
+              return {
+                id: assistantMsgRecord.id,
+                role: 'assistant',
+                content: assistantText,
+                metadata: assistantMsgRecord.metadata as Record<string, any>
+              };
+            } catch (error) {
+              console.error(`❌ Characteristics explanation generation failed:`, error);
+              // Continue to fallback logic below
+            }
+          }
+
+          // ENHANCED: Handle material explanations directly without switch data retrieval
+          if (comparisonRequest.isMaterialsExplanation && comparisonRequest.materialExamples) {
+            console.log(
+              `🧪 Material explanation detected - generating educational content directly`
+            );
+            console.log(
+              `📚 Example switches already gathered: ${Object.values(comparisonRequest.materialExamples).flat().length} total examples`
+            );
+
+            try {
+              // Get conversation history
+              const historyForPrompt =
+                await this.getConversationHistoryForPrompt(currentConversationId);
+
+              // Build educational material prompt using the pre-gathered examples
+              const prompt = this.buildMaterialEducationPrompt(
+                historyForPrompt,
+                rawUserQuery,
+                comparisonRequest.materialsToExplain || [],
+                comparisonRequest.materialExamples,
+                comparisonRequest.processingNote || ''
+              );
+
+              // Generate educational content using Gemini
+              const assistantText = await geminiService.generate(prompt);
+
+              // Check if Gemini returned a fallback error message
+              if (assistantText === AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM) {
+                const fallbackText = `I apologize, but I'm having trouble generating the material explanation right now. This could be due to AI service limitations. Please try again in a moment.`;
+
+                const [assistantMsgRecord] = await db
+                  .insert(messagesTable)
+                  .values({
+                    conversationId: currentConversationId,
+                    userId,
+                    content: fallbackText,
+                    role: 'assistant',
+                    metadata: {
+                      model: AI_CONFIG.GEMINI_MODEL,
+                      isComparison: true,
+                      comparisonValid: true,
+                      error: 'llm_generation_failure_materials',
+                      materialExplanation: true
+                    },
+                    createdAt: new Date(),
+                    timestamp: new Date()
+                  })
+                  .returning();
+
+                await db
+                  .update(conversations)
+                  .set({ updatedAt: new Date() })
+                  .where(eq(conversations.id, currentConversationId));
+
+                return {
+                  id: assistantMsgRecord.id,
+                  role: 'assistant',
+                  content: fallbackText,
+                  metadata: assistantMsgRecord.metadata as Record<string, any>
+                };
+              }
+
+              // Save successful material explanation
+              const [assistantMsgRecord] = await db
+                .insert(messagesTable)
+                .values({
+                  conversationId: currentConversationId,
+                  userId,
+                  content: assistantText,
+                  role: 'assistant',
+                  metadata: {
+                    model: AI_CONFIG.GEMINI_MODEL,
+                    isComparison: false, // This is education, not comparison
+                    comparisonValid: true,
+                    comparisonConfidence: comparisonRequest.confidence,
+                    materialExplanation: true,
+                    educationalContent: true,
+                    processingNote: comparisonRequest.processingNote,
+                    promptLength: prompt.length,
+                    exampleSwitchesCount: Object.values(comparisonRequest.materialExamples).flat()
+                      .length
+                  },
+                  createdAt: new Date(),
+                  timestamp: new Date()
+                })
+                .returning();
+
+              await db
+                .update(conversations)
+                .set({ updatedAt: new Date() })
+                .where(eq(conversations.id, currentConversationId));
+
+              return {
+                id: assistantMsgRecord.id,
+                role: 'assistant',
+                content: assistantText,
+                metadata: assistantMsgRecord.metadata as Record<string, any>
+              };
+            } catch (error) {
+              console.error(`❌ Material explanation generation failed:`, error);
+              // Continue to fallback logic below
+            }
+          }
+
           // Valid comparison - proceed with embedding-based data retrieval
+          console.log(
+            `🎯 Valid comparison confirmed - proceeding with data retrieval for ${comparisonRequest.switchesToCompare.length} switches`
+          );
+          console.log(`📋 Switches to retrieve: ${comparisonRequest.switchesToCompare.join(', ')}`);
+
           let retrievalResult: ComparisonDataRetrievalResult;
           try {
+            console.log(`🔍 Calling retrieveComprehensiveSwitchData...`);
             retrievalResult = await this.retrieveComprehensiveSwitchData(
               comparisonRequest.switchesToCompare
             );
+            console.log(`✅ Data retrieval completed:`, {
+              allSwitchesFound: retrievalResult.allSwitchesFound,
+              foundSwitches: retrievalResult.switchesData.filter((s) => s.isFound).length,
+              missingSwitches: retrievalResult.missingSwitches.length,
+              hasDataGaps: retrievalResult.hasDataGaps
+            });
           } catch (retrievalError) {
-            console.error('Critical failure in switch data retrieval:', retrievalError);
+            console.error('❌ Critical failure in switch data retrieval:', retrievalError);
+            console.error(
+              '❌ Retrieval error stack:',
+              retrievalError instanceof Error ? retrievalError.stack : 'No stack trace'
+            );
             const assistantText = `I encountered an issue retrieving switch information for your comparison. This might be due to database connectivity problems. Please try again in a moment, or you can ask about individual switches instead.`;
 
             const [assistantMsgRecord] = await db
@@ -1296,8 +1260,120 @@ export class ChatService {
           }
 
           // Check if we have enough data to proceed with comparison
+          console.log(`🔍 Analyzing retrieval results...`);
           const foundSwitches = retrievalResult.switchesData.filter((s) => s.isFound);
+          console.log(
+            `📊 Analysis: ${foundSwitches.length} found switches, ${retrievalResult.missingSwitches.length} missing switches`
+          );
+          console.log(
+            `📋 Found switches:`,
+            foundSwitches.map((s) => s.name)
+          );
+          console.log(`❌ Missing switches:`, retrievalResult.missingSwitches);
+
           if (foundSwitches.length === 0) {
+            console.log(
+              `⚠️ No switches found in database - checking if this is characteristics explanation...`
+            );
+
+            // UNIVERSAL AI FALLBACK: Use AI knowledge for any comparison when database fails
+            console.log(`🧠 Universal AI fallback - leveraging AI knowledge for comparison`);
+            console.log(`📋 Requested switches: ${comparisonRequest.switchesToCompare.join(', ')}`);
+
+            try {
+              const historyForPrompt =
+                await this.getConversationHistoryForPrompt(currentConversationId);
+
+              // Build AI-powered comparison prompt that leverages general knowledge
+              const aiPrompt = this.buildAIFallbackComparisonPrompt(
+                historyForPrompt,
+                comparisonRequest.switchesToCompare,
+                rawUserQuery,
+                comparisonRequest.resolutionResult
+              );
+
+              // Generate AI-powered response
+              const assistantText = await geminiService.generate(aiPrompt);
+
+              // Check if Gemini returned a fallback error message
+              if (assistantText === AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM) {
+                const fallbackText = `I apologize, but I'm having trouble generating information about ${comparisonRequest.switchesToCompare.join(' and ')} right now. This could be due to AI service limitations. Please try again in a moment.`;
+
+                const [assistantMsgRecord] = await db
+                  .insert(messagesTable)
+                  .values({
+                    conversationId: currentConversationId,
+                    userId,
+                    content: fallbackText,
+                    role: 'assistant',
+                    metadata: {
+                      model: AI_CONFIG.GEMINI_MODEL,
+                      isComparison: true,
+                      comparisonValid: false,
+                      error: 'llm_generation_failure_ai_fallback',
+                      aiFallbackAttempted: true
+                    },
+                    createdAt: new Date(),
+                    timestamp: new Date()
+                  })
+                  .returning();
+
+                await db
+                  .update(conversations)
+                  .set({ updatedAt: new Date() })
+                  .where(eq(conversations.id, currentConversationId));
+
+                return {
+                  id: assistantMsgRecord.id,
+                  role: 'assistant',
+                  content: fallbackText,
+                  metadata: assistantMsgRecord.metadata as Record<string, any>
+                };
+              }
+
+              // Save successful AI fallback response
+              const [assistantMsgRecord] = await db
+                .insert(messagesTable)
+                .values({
+                  conversationId: currentConversationId,
+                  userId,
+                  content: assistantText,
+                  role: 'assistant',
+                  metadata: {
+                    model: AI_CONFIG.GEMINI_MODEL,
+                    isComparison: true,
+                    comparisonValid: true,
+                    comparisonConfidence: comparisonRequest.confidence,
+                    aiFallback: true,
+                    noDatabase: true,
+                    requestedSwitches: comparisonRequest.switchesToCompare,
+                    resolutionMethod: comparisonRequest.resolutionResult?.resolutionMethod,
+                    processingNote: comparisonRequest.processingNote,
+                    promptLength: aiPrompt.length
+                  },
+                  createdAt: new Date(),
+                  timestamp: new Date()
+                })
+                .returning();
+
+              await db
+                .update(conversations)
+                .set({ updatedAt: new Date() })
+                .where(eq(conversations.id, currentConversationId));
+
+              return {
+                id: assistantMsgRecord.id,
+                role: 'assistant',
+                content: assistantText,
+                metadata: assistantMsgRecord.metadata as Record<string, any>
+              };
+            } catch (aiFallbackError) {
+              console.error('❌ AI fallback failed:', aiFallbackError);
+              // Continue to legacy error handling
+            }
+
+            // Legacy error message - only as final fallback
+            console.log(`⚠️ All fallback options exhausted - returning legacy error response`);
             const assistantText =
               `I couldn't find any of the switches you mentioned (${comparisonRequest.switchesToCompare.join(', ')}) in our database. This could be due to:\n\n` +
               `• Misspelled switch names\n` +
@@ -1339,12 +1415,127 @@ export class ChatService {
           }
 
           if (foundSwitches.length === 1) {
+            console.log(`⚠️ Only 1 switch found - handling single switch case`);
             const foundSwitch = foundSwitches[0];
+            console.log(`📝 Found switch details:`, {
+              name: foundSwitch.name,
+              manufacturer: foundSwitch.manufacturer,
+              type: foundSwitch.type
+            });
+
+            // ENHANCED: Try AI fallback for missing switches
+            console.log(`🧠 Attempting AI fallback for missing switches...`);
+
+            try {
+              const historyForPrompt =
+                await this.getConversationHistoryForPrompt(currentConversationId);
+
+              // Build prompt that combines the found switch with AI knowledge about missing ones
+              const enhancedPrompt = this.buildPartialAIFallbackPrompt(
+                historyForPrompt,
+                foundSwitch,
+                retrievalResult.missingSwitches,
+                rawUserQuery,
+                comparisonRequest.resolutionResult
+              );
+
+              // Generate enhanced response with both database and AI knowledge
+              const assistantText = await geminiService.generate(enhancedPrompt);
+
+              // Check if Gemini returned a fallback error message
+              if (assistantText === AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM) {
+                // Fall back to legacy single switch message
+                const fallbackText =
+                  `I could only find "${foundSwitch.name}" from your comparison request. For a meaningful comparison, I need at least two switches from our database.\n\n` +
+                  `${retrievalResult.missingSwitches.length > 0 ? `I couldn't find: ${retrievalResult.missingSwitches.join(', ')}\n\n` : ''}` +
+                  `Would you like me to:\n• Provide detailed information about ${foundSwitch.name}\n• Suggest similar switches to compare with ${foundSwitch.name}\n• Help you find the correct names for the other switches?`;
+
+                console.log(`💾 Saving fallback single switch response to database...`);
+                const [assistantMsgRecord] = await db
+                  .insert(messagesTable)
+                  .values({
+                    conversationId: currentConversationId,
+                    userId,
+                    content: fallbackText,
+                    role: 'assistant',
+                    metadata: {
+                      model: AI_CONFIG.GEMINI_MODEL,
+                      isComparison: true,
+                      comparisonValid: false,
+                      error: 'insufficient_switches_found',
+                      foundSwitches: [foundSwitch.name],
+                      missingSwitches: retrievalResult.missingSwitches,
+                      aiFallbackAttempted: true,
+                      aiFallbackFailed: true
+                    },
+                    createdAt: new Date(),
+                    timestamp: new Date()
+                  })
+                  .returning();
+                console.log(`✅ Fallback response saved with ID: ${assistantMsgRecord.id}`);
+
+                await db
+                  .update(conversations)
+                  .set({ updatedAt: new Date() })
+                  .where(eq(conversations.id, currentConversationId));
+
+                return {
+                  id: assistantMsgRecord.id,
+                  role: 'assistant',
+                  content: fallbackText,
+                  metadata: assistantMsgRecord.metadata as Record<string, any>
+                };
+              }
+
+              // Save successful enhanced response
+              console.log(`💾 Saving enhanced single switch + AI response to database...`);
+              const [assistantMsgRecord] = await db
+                .insert(messagesTable)
+                .values({
+                  conversationId: currentConversationId,
+                  userId,
+                  content: assistantText,
+                  role: 'assistant',
+                  metadata: {
+                    model: AI_CONFIG.GEMINI_MODEL,
+                    isComparison: true,
+                    comparisonValid: true,
+                    comparisonConfidence: comparisonRequest.confidence,
+                    foundSwitches: [foundSwitch.name],
+                    missingSwitches: retrievalResult.missingSwitches,
+                    enhancedWithAI: true,
+                    partialDatabase: true,
+                    promptLength: enhancedPrompt.length
+                  },
+                  createdAt: new Date(),
+                  timestamp: new Date()
+                })
+                .returning();
+              console.log(`✅ Enhanced response saved with ID: ${assistantMsgRecord.id}`);
+
+              await db
+                .update(conversations)
+                .set({ updatedAt: new Date() })
+                .where(eq(conversations.id, currentConversationId));
+
+              return {
+                id: assistantMsgRecord.id,
+                role: 'assistant',
+                content: assistantText,
+                metadata: assistantMsgRecord.metadata as Record<string, any>
+              };
+            } catch (aiError) {
+              console.error('❌ AI enhancement for single switch failed:', aiError);
+              // Fall back to original single switch logic
+            }
+
+            // Original single switch logic as final fallback
             const assistantText =
               `I could only find "${foundSwitch.name}" from your comparison request. For a meaningful comparison, I need at least two switches from our database.\n\n` +
               `${retrievalResult.missingSwitches.length > 0 ? `I couldn't find: ${retrievalResult.missingSwitches.join(', ')}\n\n` : ''}` +
               `Would you like me to:\n• Provide detailed information about ${foundSwitch.name}\n• Suggest similar switches to compare with ${foundSwitch.name}\n• Help you find the correct names for the other switches?`;
 
+            console.log(`💾 Saving single switch response to database...`);
             const [assistantMsgRecord] = await db
               .insert(messagesTable)
               .values({
@@ -1364,6 +1555,7 @@ export class ChatService {
                 timestamp: new Date()
               })
               .returning();
+            console.log(`✅ Single switch response saved with ID: ${assistantMsgRecord.id}`);
 
             await db
               .update(conversations)
@@ -1379,11 +1571,18 @@ export class ChatService {
           }
 
           // Format the data for the comparison prompt
+          console.log(`🔧 Proceeding with comparison - formatting data for prompt...`);
           let formattedData: any;
           try {
+            console.log(`📝 Calling formatMissingDataForPrompt...`);
             formattedData = this.formatMissingDataForPrompt(retrievalResult);
+            console.log(`✅ Data formatting completed successfully`);
           } catch (formatError) {
-            console.error('Error formatting data for prompt:', formatError);
+            console.error('❌ Error formatting data for prompt:', formatError);
+            console.error(
+              '❌ Format error stack:',
+              formatError instanceof Error ? formatError.stack : 'No stack trace'
+            );
             const assistantText = AI_CONFIG.FALLBACK_ERROR_MESSAGE_INTERNAL;
 
             const [assistantMsgRecord] = await db
@@ -1422,50 +1621,91 @@ export class ChatService {
           const historyForPrompt =
             await this.getConversationHistoryForPrompt(currentConversationId);
 
-          // Build the specialized comparison prompt
+          // Build enhanced switch data with material context
+          let enhancedSwitchData: EnhancedSwitchData[];
+          let detectedUseCase: string | undefined;
+
+          try {
+            // Build enhanced switch data from retrieval results
+            enhancedSwitchData = PromptBuilder.buildEnhancedSwitchData(
+              comparisonRequest.switchesToCompare,
+              formattedData.switchDataBlocks
+            );
+
+            // Detect use case from user query for context injection
+            detectedUseCase = this.materialContextService.detectUseCase(rawUserQuery) || undefined;
+          } catch (enhancementError) {
+            console.warn(
+              'Error building enhanced switch data, falling back to basic format:',
+              enhancementError
+            );
+            // Fallback to basic format
+            enhancedSwitchData = comparisonRequest.switchesToCompare.map((name, index) => ({
+              name,
+              dataBlock: formattedData.switchDataBlocks[index] || ''
+            }));
+          }
+
+          // Build the enhanced comparison prompt with material context
           let comparisonPrompt: string;
           try {
-            comparisonPrompt = PromptBuilder.buildComparisonPrompt(
+            comparisonPrompt = PromptBuilder.buildEnhancedComparisonPrompt(
               historyForPrompt,
-              formattedData.switchDataBlocks,
+              enhancedSwitchData,
               formattedData.promptInstructions,
               rawUserQuery,
-              comparisonRequest.switchesToCompare
+              comparisonRequest.switchesToCompare,
+              detectedUseCase
             );
           } catch (promptError) {
-            console.error('Error building comparison prompt:', promptError);
-            const assistantText = AI_CONFIG.FALLBACK_ERROR_MESSAGE_INTERNAL;
+            console.error('Error building enhanced comparison prompt:', promptError);
 
-            const [assistantMsgRecord] = await db
-              .insert(messagesTable)
-              .values({
-                conversationId: currentConversationId,
-                userId,
-                content: assistantText,
+            // Fallback to legacy prompt builder
+            try {
+              comparisonPrompt = PromptBuilder.buildComparisonPrompt(
+                historyForPrompt,
+                formattedData.switchDataBlocks,
+                formattedData.promptInstructions,
+                rawUserQuery,
+                comparisonRequest.switchesToCompare
+              );
+            } catch (fallbackError) {
+              console.error('Even fallback prompt building failed:', fallbackError);
+              const assistantText = AI_CONFIG.FALLBACK_ERROR_MESSAGE_INTERNAL;
+
+              const [assistantMsgRecord] = await db
+                .insert(messagesTable)
+                .values({
+                  conversationId: currentConversationId,
+                  userId,
+                  content: assistantText,
+                  role: 'assistant',
+                  metadata: {
+                    model: AI_CONFIG.GEMINI_MODEL,
+                    isComparison: true,
+                    error: 'prompt_building_failure',
+                    errorDetails:
+                      fallbackError instanceof Error
+                        ? fallbackError.message
+                        : 'Unknown prompt error'
+                  },
+                  createdAt: new Date(),
+                  timestamp: new Date()
+                })
+                .returning();
+
+              await db
+                .update(conversations)
+                .set({ updatedAt: new Date() })
+                .where(eq(conversations.id, currentConversationId));
+
+              return {
+                id: assistantMsgRecord.id,
                 role: 'assistant',
-                metadata: {
-                  model: AI_CONFIG.GEMINI_MODEL,
-                  isComparison: true,
-                  error: 'prompt_building_failure',
-                  errorDetails:
-                    promptError instanceof Error ? promptError.message : 'Unknown prompt error'
-                },
-                createdAt: new Date(),
-                timestamp: new Date()
-              })
-              .returning();
-
-            await db
-              .update(conversations)
-              .set({ updatedAt: new Date() })
-              .where(eq(conversations.id, currentConversationId));
-
-            return {
-              id: assistantMsgRecord.id,
-              role: 'assistant',
-              content: assistantText,
-              metadata: assistantMsgRecord.metadata as Record<string, any>
-            };
+                content: assistantText,
+                metadata: assistantMsgRecord.metadata as Record<string, any>
+              };
+            }
           }
 
           // Generate comparison using Gemini (GeminiService has its own error handling)
@@ -1526,7 +1766,14 @@ export class ChatService {
                 missingSwitches: retrievalResult.missingSwitches,
                 hasDataGaps: retrievalResult.hasDataGaps,
                 promptLength: comparisonPrompt.length,
-                retrievalNotes: retrievalResult.retrievalNotes
+                retrievalNotes: retrievalResult.retrievalNotes,
+                // Enhanced metadata
+                resolutionMethod: comparisonRequest.resolutionResult?.resolutionMethod,
+                resolutionWarnings: comparisonRequest.resolutionResult?.warnings,
+                materialContextApplied: enhancedSwitchData.some((s) => s.materialData),
+                detectedUseCase,
+                enhancedComparison: true,
+                processingNote: comparisonRequest.processingNote
               },
               createdAt: new Date(),
               timestamp: new Date()

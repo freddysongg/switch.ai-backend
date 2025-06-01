@@ -8,9 +8,30 @@ export const AI_CONFIG = {
   EMBEDDING_TOPIC: 'feature-extraction',
 
   // RAG Parameters
-  SIMILARITY_THRESHOLD: 0.35, // Adjusted threshold for context relevance
-  CONTEXT_RESULTS_COUNT: 3, // Number of switch entries to retrieve
-  CHAT_HISTORY_MAX_TURNS: 3, // Number of recent Q&A pairs for prompt context
+  SIMILARITY_THRESHOLD: 0.35,
+  CONTEXT_RESULTS_COUNT: 5,
+  CHAT_HISTORY_MAX_TURNS: 3,
+
+  // Enhanced Comparison Settings
+  COMPARISON_CONFIDENCE_THRESHOLD: 0.5,
+  ENHANCED_RESOLUTION_ENABLED: true,
+  MATERIAL_CONTEXT_ENABLED: true,
+
+  // Switch Resolution Confidence Thresholds
+  RESOLUTION_THRESHOLDS: {
+    EXACT_MATCH: 0.95,
+    FUZZY_MATCH: 0.8,
+    EMBEDDING_MATCH: 0.65,
+    AI_DISAMBIGUATION: 0.6
+  },
+
+  // Material Context Settings
+  MATERIAL_CONTEXT: {
+    ENABLE_SOUND_DESCRIPTORS: true,
+    ENABLE_FEEL_DESCRIPTORS: true,
+    ENABLE_USE_CASE_DETECTION: true,
+    ENABLE_ENTHUSIAST_TERMINOLOGY: true
+  },
 
   // Fallback Messages
   FALLBACK_ERROR_MESSAGE_LLM:
