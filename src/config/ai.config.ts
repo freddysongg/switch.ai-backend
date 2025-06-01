@@ -1,7 +1,7 @@
 export const AI_CONFIG = {
   GEMINI_MODEL: 'gemini-2.0-flash',
   TEMPERATURE: 0.6,
-  MAX_OUTPUT_TOKENS: 350,
+  MAX_OUTPUT_TOKENS: 1500,
 
   // Embedding Settings (Local Xenova/Transformers.js)
   EMBEDDING_MODEL: 'Xenova/all-MiniLM-L6-v2',
@@ -21,7 +21,7 @@ export const AI_CONFIG = {
   // Structured Prompt Components
   PROMPT_COMPONENTS: {
     // ### ROLE:
-    ROLE_DEFINITION: `You are SwitchSage, an exceptionally knowledgeable and friendly AI assistant specializing in mechanical keyboard switches. Your expertise is trusted by enthusiasts and newcomers alike.`,
+    ROLE_DEFINITION: `You are switch.ai, an exceptionally knowledgeable and friendly AI assistant specializing in mechanical keyboard switches. Your expertise is trusted by enthusiasts and newcomers alike.`,
 
     // ### CORE_TASK:
     CORE_TASK_DESCRIPTION: `Your primary task is to provide detailed, accurate, and helpful answers strictly about mechanical keyboard switches.

@@ -207,6 +207,168 @@ These endpoints require a valid JWT token passed in the `Authorization` header a
 
 *(Note: This is a high-level overview. Specific request/response payloads, detailed authorization logic (e.g., ownership checks for resources), and error handling are defined in the respective controller and service files.)*
 
+## Enhanced Comparison Feature
+
+**Version 2.0** - The SwitchAI backend now includes advanced switch comparison functionality that automatically detects comparison intent and generates structured Markdown comparisons.
+
+### Comparison Intent Detection
+
+The `/api/chat` endpoint now intelligently detects when users are requesting switch comparisons through:
+
+- **Pattern Recognition**: Detects phrases like "vs", "versus", "compare", "difference between", "which is better"
+- **Embedding-Based Matching**: Uses semantic similarity search to match switch names with 0.5+ confidence threshold
+- **Multi-Strategy Extraction**: Employs 6 different strategies including brand-based, color-based, and quoted switch extraction
+
+### Request Format
+
+Standard chat request with comparison queries:
+
+```json
+{
+  "message": "Compare Gateron Oil King vs Cherry MX Red",
+  "conversationId": "optional-uuid"
+}
+```
+
+**Supported Comparison Patterns**:
+- `"Gateron Oil King vs Cherry MX Red"`
+- `"Compare Holy Panda and Glorious Panda"`
+- `"What's the difference between Kailh Brown and Cherry Brown?"`
+- `"Which is better: Gateron Yellow or Red for gaming?"`
+- `"Cherry MX Blue vs Brown vs Red"` (3-switch comparisons)
+
+### Response Format for Comparisons
+
+When comparison intent is detected, the response includes enhanced metadata:
+
+```json
+{
+  "id": "message-uuid",
+  "role": "assistant",
+  "content": "## Switch Comparison: Gateron Oil King vs Cherry MX Red\n\n### Overview\n...",
+  "metadata": {
+    "model": "gemini-1.5-flash",
+    "isComparison": true,
+    "comparisonValid": true,
+    "comparisonConfidence": 0.85,
+    "switchesCompared": ["Gateron Oil King", "Cherry MX Red"],
+    "switchesFoundInDB": ["Gateron Oil King", "Cherry MX Red"],
+    "missingSwitches": [],
+    "hasDataGaps": false,
+    "promptLength": 1245,
+    "retrievalNotes": ["High confidence embedding match for both switches"]
+  }
+}
+```
+
+### Comparison Response Structure
+
+All comparison responses follow a standardized Markdown format:
+
+```markdown
+## Switch Comparison: [Switch 1] vs [Switch 2] [vs Switch 3]
+
+### Overview
+[Brief 2-3 sentence summary of key differences]
+
+### Technical Specifications
+| Specification | Switch 1 | Switch 2 | Switch 3 |
+|---------------|----------|----------|----------|
+| Manufacturer  | Value    | Value    | Value    |
+| Type          | Value    | Value    | Value    |
+| ...           | ...      | ...      | ...      |
+
+### In-Depth Analysis
+
+#### Housing Materials
+[Detailed material comparison]
+
+#### Force & Weighting
+[Force profile analysis]
+
+#### Travel & Actuation
+[Travel distance comparison]
+
+#### Sound Profile
+[Acoustic characteristics]
+
+#### Feel & Tactility
+[User experience comparison]
+
+#### Use Case Suitability
+[Gaming vs typing recommendations]
+
+### Typing Experience Summary
+[Overall experience synthesis]
+
+### Conclusion
+[Final recommendations with specific use cases]
+```
+
+### Comparison Features
+
+- **Variable Switch Handling**: Supports 1-3+ switches with intelligent filtering
+- **Missing Data Management**: Gracefully handles switches not in database with general knowledge attribution
+- **Embedding-Based Matching**: Fuzzy name matching for variations like "gateron oil kings" → "Gateron Oil King"
+- **Confidence Scoring**: Only generates comparisons with ≥0.5 confidence matches
+- **Token Limit Compliance**: All responses ≤1500 tokens per FR15
+- **Comprehensive Error Handling**: User-friendly messages for all failure scenarios
+
+### Error Response Examples
+
+**Insufficient Switches**:
+```json
+{
+  "content": "I found \"Cherry MX Blue\" in your query. For a comparison, I need at least two switches...",
+  "metadata": {
+    "isComparison": true,
+    "comparisonValid": false,
+    "error": "insufficient_switches"
+  }
+}
+```
+
+**No Switches Found**:
+```json
+{
+  "content": "I couldn't find any of the switches you mentioned in our database...",
+  "metadata": {
+    "isComparison": true, 
+    "comparisonValid": false,
+    "error": "no_switches_found"
+  }
+}
+```
+
+**Low Confidence Match**:
+```json
+{
+  "content": "I found some potential switch matches but with low confidence. Could you please...",
+  "metadata": {
+    "isComparison": true,
+    "comparisonValid": false,
+    "comparisonConfidence": 0.3,
+    "error": "low_confidence_match"
+  }
+}
+```
+
+### Testing
+
+- **Postman Collection**: `/tasks/postman_collections/SwitchAI_Enhanced_Comparisons_Tests.postman_collection.json`
+- **Test Plan**: `/tasks/postman_collections/Comparison_Test_Plan.md`  
+- **Response Structure Guide**: `/tasks/postman_collections/Expected_Response_Structure.md`
+
+### Implementation Notes
+
+- Embedding service fallback to direct name matching if unavailable
+- Database connection failure graceful degradation  
+- LLM generation failure fallback to standard error messages
+- Conversation history maintained across comparison interactions
+- Full backward compatibility with non-comparison queries
+
+---
+
 ## Database
 
 This project uses [Drizzle ORM](https://orm.drizzle.team/) with a PostgreSQL database, managed via [Supabase](https://supabase.io/).

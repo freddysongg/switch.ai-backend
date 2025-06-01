@@ -1,0 +1,1049 @@
+{
+  "info": {
+    "name": "SwitchAI Enhanced Comparisons Tests",
+    "description": "Comprehensive test suite for SwitchAI's enhanced switch comparison functionality. Tests cover intent detection, switch extraction, data retrieval, prompt generation, and response quality validation.",
+    "version": "1.0.0",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{jwt_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "jwt_token",
+      "value": "your_jwt_token_here",
+      "type": "string"
+    },
+    {
+      "key": "conversation_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Category 1: Basic Two-Switch Comparisons",
+      "item": [
+        {
+          "name": "1.1 Perfect Match - Popular Linear Switches",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Compare Gateron Oil King vs Cherry MX Red\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Test Case 1.1: Perfect Match - Popular Linear Switches",
+                  "pm.test('Response status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response time is reasonable', function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(10000);",
+                  "});",
+                  "",
+                  "let response = pm.response.json();",
+                  "",
+                  "pm.test('Response has correct structure', function () {",
+                  "    pm.expect(response).to.have.property('id');",
+                  "    pm.expect(response).to.have.property('role', 'assistant');",
+                  "    pm.expect(response).to.have.property('content');",
+                  "    pm.expect(response).to.have.property('metadata');",
+                  "});",
+                  "",
+                  "pm.test('Metadata indicates successful comparison', function () {",
+                  "    pm.expect(response.metadata).to.have.property('isComparison', true);",
+                  "    pm.expect(response.metadata).to.have.property('comparisonValid', true);",
+                  "    pm.expect(response.metadata.comparisonConfidence).to.be.above(0.5);",
+                  "});",
+                  "",
+                  "pm.test('Content contains required sections', function () {",
+                  "    let content = response.content;",
+                  "    pm.expect(content).to.include('## Switch Comparison');",
+                  "    pm.expect(content).to.include('### Overview');",
+                  "    pm.expect(content).to.include('### Technical Specifications');",
+                  "    pm.expect(content).to.include('### In-Depth Analysis');",
+                  "    pm.expect(content).to.include('### Typing Experience Summary');",
+                  "    pm.expect(content).to.include('### Conclusion');",
+                  "});",
+                  "",
+                  "pm.test('Content includes both switch names', function () {",
+                  "    let content = response.content.toLowerCase();",
+                  "    pm.expect(content).to.include('gateron oil king');",
+                  "    pm.expect(content).to.include('cherry mx red');",
+                  "});",
+                  "",
+                  "pm.test('Response length is within token limit', function () {",
+                  "    // Approximate token count (1 token ≈ 4 characters)",
+                  "    let approxTokens = response.content.length / 4;",
+                  "    pm.expect(approxTokens).to.be.below(1500);",
+                  "});",
+                  "",
+                  "// Store conversation ID for follow-up tests",
+                  "if (response.metadata && response.metadata.conversationId) {",
+                  "    pm.collectionVariables.set('conversation_id', response.metadata.conversationId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.2 Popular Tactile vs Linear",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"What's the difference between Holy Panda and Gateron Yellow?\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Response status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "let response = pm.response.json();",
+                  "",
+                  "pm.test('Detects cross-type comparison correctly', function () {",
+                  "    pm.expect(response.metadata.isComparison).to.be.true;",
+                  "    pm.expect(response.content.toLowerCase()).to.include('tactile');",
+                  "    pm.expect(response.content.toLowerCase()).to.include('linear');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.3 Brand-Specific Comparison",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Akko CS Rose Red vs Akko CS Wine Red comparison\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Response status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "let response = pm.response.json();",
+                  "",
+                  "pm.test('Handles same-brand comparison', function () {",
+                  "    pm.expect(response.metadata.isComparison).to.be.true;",
+                  "    let content = response.content.toLowerCase();",
+                  "    pm.expect(content).to.include('akko');",
+                  "    pm.expect(content).to.include('rose red');",
+                  "    pm.expect(content).to.include('wine red');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Category 2: Three-Switch Comparisons",
+      "item": [
+        {
+          "name": "2.1 Mixed Switch Types",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Compare Cherry MX Blue vs Brown vs Red\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Response status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "let response = pm.response.json();",
+                  "",
+                  "pm.test('Handles three-switch comparison', function () {",
+                  "    pm.expect(response.metadata.isComparison).to.be.true;",
+                  "    pm.expect(response.metadata.switchesCompared).to.have.lengthOf(3);",
+                  "});",
+                  "",
+                  "pm.test('Content mentions all three switches', function () {",
+                  "    let content = response.content.toLowerCase();",
+                  "    pm.expect(content).to.include('blue');",
+                  "    pm.expect(content).to.include('brown');",
+                  "    pm.expect(content).to.include('red');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.2 Linear Switch Trio",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Gateron Oil King vs Novelkeys Cream vs Kailh Red comparison\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Response status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "let response = pm.response.json();",
+                  "",
+                  "pm.test('Handles linear trio comparison', function () {",
+                  "    pm.expect(response.metadata.isComparison).to.be.true;",
+                  "    pm.expect(response.content.toLowerCase()).to.include('linear');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Category 3: Missing Data Handling",
+      "item": [
+        {
+          "name": "3.1 Partial Database Coverage",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Compare Gateron Oil King vs UnknownSwitch2024\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Response status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "let response = pm.response.json();",
+                  "",
+                  "pm.test('Handles missing switch gracefully', function () {",
+                  "    // Should either provide comparison with general knowledge or",
+                  "    // inform user about missing switch",
+                  "    let content = response.content.toLowerCase();",
+                  "    let hasMissingInfo = content.includes('not found') || ",
+                  "                        content.includes('n/a') ||",
+                  "                        content.includes('based on general') ||",
+                  "                        content.includes('according to typical');",
+                  "    pm.expect(hasMissingInfo).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Category 4: Variable Switch Handling",
+      "item": [
+        {
+          "name": "4.1 Single Switch (Invalid Comparison)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Tell me about Cherry MX Blue vs\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Response status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "let response = pm.response.json();",
+                  "",
+                  "pm.test('Provides user feedback for insufficient switches', function () {",
+                  "    if (response.metadata.isComparison) {",
+                  "        pm.expect(response.metadata.comparisonValid).to.be.false;",
+                  "    }",
+                  "    // Should ask for more switches or provide single switch info",
+                  "    let content = response.content.toLowerCase();",
+                  "    let providesGuidance = content.includes('need') ||",
+                  "                          content.includes('specify') ||",
+                  "                          content.includes('another') ||",
+                  "                          content.includes('more');",
+                  "    pm.expect(providesGuidance).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.2 Too Many Switches (4+ extraction)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Compare Cherry MX Red vs Blue vs Brown vs Black vs Green vs White\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Response status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "let response = pm.response.json();",
+                  "",
+                  "pm.test('Intelligently filters to optimal number', function () {",
+                  "    if (response.metadata.isComparison && response.metadata.comparisonValid) {",
+                  "        pm.expect(response.metadata.switchesCompared.length).to.be.at.most(3);",
+                  "    }",
+                  "    // Should inform user about filtering",
+                  "    let content = response.content.toLowerCase();",
+                  "    let mentionsFiltering = content.includes('focus') ||",
+                  "                           content.includes('found') ||",
+                  "                           content.includes('relevant');",
+                  "    pm.expect(mentionsFiltering).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.3 No Switches Detected",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"What's better for gaming?\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Response status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "let response = pm.response.json();",
+                  "",
+                  "pm.test('Does not trigger comparison mode', function () {",
+                  "    pm.expect(response.metadata.isComparison).to.be.false;",
+                  "});",
+                  "",
+                  "pm.test('Provides general gaming advice', function () {",
+                  "    let content = response.content.toLowerCase();",
+                  "    pm.expect(content).to.include('gaming');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Category 5: Pattern Recognition & Intent Detection",
+      "item": [
+        {
+          "name": "5.1a Pattern: versus",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Gateron Oil King versus Cherry MX Red\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Detects versus pattern', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    let response = pm.response.json();",
+                  "    pm.expect(response.metadata.isComparison).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.1b Pattern: difference between",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"difference between Kailh Brown and Cherry Brown\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Detects difference pattern', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    let response = pm.response.json();",
+                  "    pm.expect(response.metadata.isComparison).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.1c Pattern: which is better",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"which is better: Gateron Yellow or Red?\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Detects which is better pattern', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    let response = pm.response.json();",
+                  "    pm.expect(response.metadata.isComparison).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.1d Pattern: or for specific use",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Holy Panda or Glorious Panda for typing?\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Detects or pattern with use case', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    let response = pm.response.json();",
+                  "    pm.expect(response.metadata.isComparison).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5.2 Complex Query Pattern",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"I'm deciding between the Gateron Oil King, which I hear is smooth, and the Cherry MX Red for my new gaming setup\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Extracts switches from complex sentence', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    let response = pm.response.json();",
+                  "    pm.expect(response.metadata.isComparison).to.be.true;",
+                  "    let content = response.content.toLowerCase();",
+                  "    pm.expect(content).to.include('gateron oil king');",
+                  "    pm.expect(content).to.include('cherry mx red');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Category 6: Embedding-Based Matching & Confidence",
+      "item": [
+        {
+          "name": "6.1 Fuzzy Name Matching",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"gateron oil kings vs cherry red mx\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Handles fuzzy matching correctly', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    let response = pm.response.json();",
+                  "    if (response.metadata.isComparison) {",
+                  "        pm.expect(response.metadata.comparisonConfidence).to.be.above(0.3);",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Category 7: Error Handling & Fallbacks",
+      "item": [
+        {
+          "name": "7.1 Test Normal Operation (Baseline)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Compare Cherry MX Red vs Blue\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Baseline comparison works', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    let response = pm.response.json();",
+                  "    pm.expect(response.metadata.isComparison).to.be.true;",
+                  "    pm.expect(response.content).to.include('Cherry MX');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Category 8: Response Quality & Structure",
+      "item": [
+        {
+          "name": "8.1 Markdown Formatting Validation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Compare Gateron Oil King vs Cherry MX Red for detailed analysis\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Contains proper Markdown headers', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    let response = pm.response.json();",
+                  "    let content = response.content;",
+                  "    ",
+                  "    // Check for H2 headers",
+                  "    pm.expect(content).to.match(/##\\s+.+/);",
+                  "    ",
+                  "    // Check for H3 headers",
+                  "    pm.expect(content).to.match(/###\\s+.+/);",
+                  "    ",
+                  "    // Check for table formatting",
+                  "    pm.expect(content).to.match(/\\|.+\\|/);",
+                  "    ",
+                  "    // Check for table header separator",
+                  "    pm.expect(content).to.match(/\\|[-:]+\\|/);",
+                  "});",
+                  "",
+                  "pm.test('Uses proper bold/italic formatting', function () {",
+                  "    let content = pm.response.json().content;",
+                  "    ",
+                  "    // Should have some bold text",
+                  "    let hasBold = content.includes('**') || content.includes('__');",
+                  "    pm.expect(hasBold).to.be.true;",
+                  "});",
+                  "",
+                  "pm.test('Token limit compliance', function () {",
+                  "    let content = pm.response.json().content;",
+                  "    let approxTokens = content.length / 4;",
+                  "    pm.expect(approxTokens).to.be.below(1500);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8.2 Content Quality Assessment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Compare Gateron Oil King vs Cherry MX Red for comprehensive review\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Contains technical specifications', function () {",
+                  "    let content = pm.response.json().content.toLowerCase();",
+                  "    ",
+                  "    // Should mention technical aspects",
+                  "    let hasTechnical = content.includes('actuation') ||",
+                  "                      content.includes('force') ||",
+                  "                      content.includes('travel') ||",
+                  "                      content.includes('housing');",
+                  "    pm.expect(hasTechnical).to.be.true;",
+                  "});",
+                  "",
+                  "pm.test('Provides actionable recommendations', function () {",
+                  "    let content = pm.response.json().content.toLowerCase();",
+                  "    ",
+                  "    // Should have recommendations",
+                  "    let hasRecommendations = content.includes('recommend') ||",
+                  "                            content.includes('better for') ||",
+                  "                            content.includes('ideal for') ||",
+                  "                            content.includes('choose');",
+                  "    pm.expect(hasRecommendations).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Category 9: Conversation Context & History",
+      "item": [
+        {
+          "name": "9.1 Multi-Turn Context - Initial Comparison",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Compare Gateron Oil King vs Cherry MX Red\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Initial comparison successful', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    let response = pm.response.json();",
+                  "    pm.expect(response.metadata.isComparison).to.be.true;",
+                  "});",
+                  "",
+                  "// Extract conversation ID for follow-up",
+                  "pm.test('Set conversation ID for follow-up', function () {",
+                  "    let response = pm.response.json();",
+                  "    // The conversation ID should be available from the chat service",
+                  "    // This is a placeholder - adjust based on actual response structure",
+                  "    pm.collectionVariables.set('test_conversation_id', 'placeholder');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "9.2 Multi-Turn Context - Follow-up Question",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Which one is better for gaming?\",\n  \"conversationId\": \"{{test_conversation_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Follow-up maintains context', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    let response = pm.response.json();",
+                  "    let content = response.content.toLowerCase();",
+                  "    ",
+                  "    // Should reference the previous comparison",
+                  "    let mentionsPrevious = content.includes('oil king') ||",
+                  "                          content.includes('cherry') ||",
+                  "                          content.includes('gaming');",
+                  "    pm.expect(mentionsPrevious).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Category 10: Edge Cases & Boundary Testing",
+      "item": [
+        {
+          "name": "10.1 Very Long Query",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"I've been researching mechanical switches for weeks now and I'm really torn between several options. I'm particularly interested in comparing the Gateron Oil King switches, which I've heard have a very smooth linear feel and are great for both gaming and typing, versus the Cherry MX Red switches, which seem to be the gold standard for linear switches and have been around for a long time with proven reliability. I'm building a new gaming setup but I also do a lot of coding and typing for work, so I need something that's versatile. Could you help me understand the key differences between these two switches in terms of feel, sound, durability, and overall performance for different use cases?\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Handles long query correctly', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    let response = pm.response.json();",
+                  "    pm.expect(response.metadata.isComparison).to.be.true;",
+                  "    ",
+                  "    let content = response.content.toLowerCase();",
+                  "    pm.expect(content).to.include('oil king');",
+                  "    pm.expect(content).to.include('cherry mx red');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "10.2 Minimal Query",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"red vs blue\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Handles minimal query', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    let response = pm.response.json();",
+                  "    ",
+                  "    // Should either detect as comparison or ask for clarification",
+                  "    let isValidResponse = response.metadata.isComparison ||",
+                  "                         response.content.toLowerCase().includes('clarify') ||",
+                  "                         response.content.toLowerCase().includes('specific');",
+                  "    pm.expect(isValidResponse).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+} 
