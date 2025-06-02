@@ -1,14 +1,14 @@
 import {
   CHARACTERISTIC_UNDERSTANDING_PROMPT,
   SWITCH_CHARACTERISTICS
-} from '../../../config/materialProperties.js';
-import { GeminiService } from '../../gemini.js';
-import { SwitchQueryService } from '../database/switchQuery.js';
+} from '../config/materialProperties.js';
+import { GeminiService } from '../services/gemini.js';
+import { SwitchQueryService } from './switchQuery.js';
 import {
   CharacteristicsAnalysisResult,
   ProcessedComparisonRequest,
   SwitchCandidate
-} from './types.js';
+} from '../types/comparison.js';
 
 export class CharacteristicsComparisonService {
   private geminiService: GeminiService;
@@ -25,8 +25,8 @@ export class CharacteristicsComparisonService {
    * Enhanced: Uses AI-powered characteristic understanding
    */
   async processCharacteristicsComparison(
-    characteristicPreferences: string[],
-    userQuery: string,
+    characteristicPreferences: string[], 
+    userQuery: string, 
     confidence: number
   ): Promise<ProcessedComparisonRequest> {
     console.log(
@@ -80,7 +80,7 @@ export class CharacteristicsComparisonService {
       };
     } catch (error) {
       console.error(`❌ AI-enhanced characteristics explanation processing failed:`, error);
-
+      
       console.log(`🔄 Falling back to basic characteristics explanation...`);
       return {
         isValidComparison: true,
@@ -155,25 +155,25 @@ export class CharacteristicsComparisonService {
    * Generate educational content about characteristics using Gemini
    */
   private async generateCharacteristicsExplanation(
-    characteristics: string[],
+    characteristics: string[], 
     examples: Record<string, SwitchCandidate[]>,
     userQuery: string
   ): Promise<CharacteristicsAnalysisResult> {
     console.log(`🧠 Generating educational content about characteristics...`);
-
+    
     try {
       const prompt = this.buildCharacteristicsEducationPrompt(characteristics, examples, userQuery);
-
+      
       const response = await this.geminiService.generate(prompt);
       console.log(`🤖 Received characteristics explanation from Gemini`);
-
+      
       return {
-        selectedSwitches: [], // No specific switches selected - this is about characteristics
+        selectedSwitches: [], 
         analysis: response
       };
     } catch (error) {
       console.error(`❌ Gemini explanation generation failed:`, error);
-
+      
       return {
         selectedSwitches: [],
         analysis: `Educational overview of ${characteristics.join(' vs ')} characteristics in mechanical keyboard switches.`
@@ -185,7 +185,7 @@ export class CharacteristicsComparisonService {
    * Build educational prompt focusing on characteristics explanation
    */
   private buildCharacteristicsEducationPrompt(
-    characteristics: string[],
+    characteristics: string[], 
     examples: Record<string, SwitchCandidate[]>,
     userQuery: string
   ): string {
@@ -462,7 +462,7 @@ Analyze these terms and map them to standardized characteristics. Handle any typ
             interpretations[key] =
               `Mapped "${input}" to "${definition.primaryName}" based on similarity`;
           }
-          break;
+        break;
         }
       }
     }

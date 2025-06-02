@@ -1,9 +1,9 @@
 import { sql } from 'drizzle-orm';
 
-import { SWITCH_CHARACTERISTICS } from '../../../config/materialProperties.js';
-import { db } from '../../../db/index.js';
-import { switches as switchesTable } from '../../../db/schema.js';
-import { SwitchCandidate } from '../comparison/types.js';
+import { SWITCH_CHARACTERISTICS } from '../config/materialProperties.js';
+import { db } from '../db/index.js';
+import { switches as switchesTable } from '../db/schema.js';
+import { SwitchCandidate } from '../types/comparison.js';
 
 export class SwitchQueryService {
   /**
@@ -15,7 +15,7 @@ export class SwitchQueryService {
         .select({ name: switchesTable.name })
         .from(switchesTable)
         .where(sql`${switchesTable.name} IS NOT NULL`);
-
+      
       return switches.map((s) => s.name);
     } catch (error) {
       console.error('Error fetching available switch names:', error);
@@ -157,16 +157,16 @@ export class SwitchQueryService {
    */
   async findSwitchesForMaterialComparison(materialPreferences: string[]): Promise<string[]> {
     console.log(`🧪 Enhanced findSwitchesForMaterialComparison with alias detection`);
-
+    
     const allResults: Array<{ name: string; manufacturer: string; type: string }> = [];
-
+    
     for (const preference of materialPreferences) {
       console.log(`🔍 Processing material preference: "${preference}"`);
-
+      
       // Step 1: Generate material aliases and search terms
       const materialAliases = this.detectMaterialAliases(preference);
       console.log(`📝 Generated ${materialAliases.length} search variations for "${preference}"`);
-
+      
       // Step 2: Execute database queries for each alias
       for (const alias of materialAliases) {
         try {
@@ -177,7 +177,7 @@ export class SwitchQueryService {
                 AND s.name IS NOT NULL
                 LIMIT 10`
           );
-
+          
           console.log(`🎯 Found ${results.length} switches for search term "${alias.searchTerm}"`);
           allResults.push(...results);
         } catch (queryError) {
@@ -185,10 +185,10 @@ export class SwitchQueryService {
         }
       }
     }
-
+    
     // Step 3: Select variety switches to ensure good representation
     const varietySwitches = this.selectVarietySwitches(allResults, 3);
-
+    
     console.log(
       `✅ Material comparison completed - selected ${varietySwitches.length} representative switches`
     );
@@ -203,55 +203,54 @@ export class SwitchQueryService {
   ): Array<{ searchTerm: string; condition: string }> {
     const aliases: Array<{ searchTerm: string; condition: string }> = [];
     const pref = preference.toLowerCase();
-
+    
     if (pref.includes('abs') || pref === 'plastic') {
       aliases.push({
         searchTerm: 'ABS housing',
         condition: `(LOWER(s.top_housing) LIKE '%abs%' OR LOWER(s.bottom_housing) LIKE '%abs%')`
       });
     }
-
+    
     if (pref.includes('pom') || pref.includes('polyom')) {
       aliases.push({
         searchTerm: 'POM housing',
         condition: `(LOWER(s.top_housing) LIKE '%pom%' OR LOWER(s.bottom_housing) LIKE '%pom%')`
       });
     }
-
+    
     if (pref.includes('pc') || pref.includes('polycarbonate')) {
       aliases.push({
         searchTerm: 'PC/Polycarbonate housing',
         condition: `(LOWER(s.top_housing) LIKE '%pc%' OR LOWER(s.bottom_housing) LIKE '%pc%' OR LOWER(s.top_housing) LIKE '%polycarbonate%' OR LOWER(s.bottom_housing) LIKE '%polycarbonate%')`
       });
     }
-
+    
     if (pref.includes('nylon')) {
       aliases.push({
         searchTerm: 'Nylon housing',
         condition: `(LOWER(s.top_housing) LIKE '%nylon%' OR LOWER(s.bottom_housing) LIKE '%nylon%')`
       });
     }
-
+    
     if (pref.includes('gateron')) {
       aliases.push({
         searchTerm: 'Gateron switches',
         condition: `LOWER(s.manufacturer) LIKE '%gateron%'`
       });
     }
-
+    
     if (pref.includes('cherry')) {
       aliases.push({
         searchTerm: 'Cherry switches',
         condition: `LOWER(s.manufacturer) LIKE '%cherry%'`
       });
     }
-
-    // Fallback: search by preference as general term
+    
     aliases.push({
       searchTerm: `General search: ${preference}`,
       condition: `(LOWER(s.name) LIKE '%${pref}%' OR LOWER(s.top_housing) LIKE '%${pref}%' OR LOWER(s.bottom_housing) LIKE '%${pref}%' OR LOWER(s.stem) LIKE '%${pref}%')`
     });
-
+    
     return aliases;
   }
 
@@ -259,36 +258,36 @@ export class SwitchQueryService {
    * Select variety switches to ensure good representation across manufacturers and types
    */
   private selectVarietySwitches(
-    switches: Array<{ name: string; manufacturer: string; type: string }>,
+    switches: Array<{ name: string; manufacturer: string; type: string }>, 
     maxCount: number
   ): Array<{ name: string; manufacturer: string; type: string }> {
     const uniqueSwitches = switches.filter(
       (switch_, index, arr) => arr.findIndex((s) => s.name === switch_.name) === index
     );
-
+    
     if (uniqueSwitches.length <= maxCount) {
       return uniqueSwitches;
     }
-
+    
     const selected: Array<{ name: string; manufacturer: string; type: string }> = [];
     const usedManufacturers = new Set<string>();
     const usedTypes = new Set<string>();
-
+    
     // Priority 1: Ensure manufacturer diversity
     for (const switch_ of uniqueSwitches) {
       if (selected.length >= maxCount) break;
-
+      
       if (!usedManufacturers.has(switch_.manufacturer?.toLowerCase() || '')) {
         selected.push(switch_);
         usedManufacturers.add(switch_.manufacturer?.toLowerCase() || '');
         usedTypes.add(switch_.type?.toLowerCase() || '');
       }
     }
-
+    
     // Priority 2: Ensure type diversity
     for (const switch_ of uniqueSwitches) {
       if (selected.length >= maxCount) break;
-
+      
       if (
         !selected.some((s) => s.name === switch_.name) &&
         !usedTypes.has(switch_.type?.toLowerCase() || '')
@@ -297,16 +296,16 @@ export class SwitchQueryService {
         usedTypes.add(switch_.type?.toLowerCase() || '');
       }
     }
-
+    
     // Priority 3: Fill remaining slots
     for (const switch_ of uniqueSwitches) {
       if (selected.length >= maxCount) break;
-
+      
       if (!selected.some((s) => s.name === switch_.name)) {
         selected.push(switch_);
       }
     }
-
+    
     return selected.slice(0, maxCount);
   }
 
@@ -317,17 +316,17 @@ export class SwitchQueryService {
     characteristics: string[]
   ): Promise<SwitchCandidate[]> {
     console.log(`🔍 Finding candidate switches for characteristics: ${characteristics.join(', ')}`);
-
+    
     const candidates: SwitchCandidate[] = [];
     const processedSwitches = new Set<string>();
-
+    
     for (const characteristic of characteristics) {
       const char = characteristic.toLowerCase();
       console.log(`🎯 Processing characteristic: "${char}"`);
-
+      
       try {
         let query: any;
-
+        
         // Build queries based on characteristic type
         if (char.includes('smooth') || char.includes('linear')) {
           query = sql`
@@ -381,7 +380,7 @@ export class SwitchQueryService {
             LIMIT 10
           `;
         }
-
+        
         const results = await db.execute<{
           name: string;
           manufacturer: string;
@@ -389,9 +388,9 @@ export class SwitchQueryService {
           actuationForce: number | null;
           description: string;
         }>(query);
-
+        
         console.log(`📊 Found ${results.length} candidates for "${char}"`);
-
+        
         // Add to candidates if not already processed
         for (const result of results) {
           if (!processedSwitches.has(result.name)) {
@@ -409,7 +408,7 @@ export class SwitchQueryService {
         console.error(`❌ Error querying for characteristic "${char}":`, error);
       }
     }
-
+    
     console.log(`✅ Total candidates found: ${candidates.length}`);
     return candidates;
   }
@@ -445,7 +444,6 @@ export class SwitchQueryService {
 
     // Strategy 2: Enhanced brand-based extraction
     const brandPatterns = [
-      // Comprehensive brand patterns with multiple name formats
       /(?:gateron)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
       /(?:cherry)\s+mx\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
       /(?:cherry)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
@@ -498,7 +496,6 @@ export class SwitchQueryService {
         .map((item) => item.trim())
         .filter((item) => item.length > 2)
         .filter((item) => {
-          // Filter items that look like switch names
           const switchIndicators = [
             'switch',
             'linear',
@@ -518,7 +515,6 @@ export class SwitchQueryService {
       extractedNames.push(...listItems);
     }
 
-    // Clean and deduplicate extracted names
     const cleanedNames = extractedNames
       .map((name) => name.trim())
       .filter((name) => name.length > 2)

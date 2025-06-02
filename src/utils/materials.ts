@@ -1,6 +1,6 @@
-import { HOUSING_MATERIALS, STEM_MATERIALS } from '../../../config/materialProperties.js';
-import { SwitchQueryService } from '../database/switchQuery.js';
-import { ProcessedComparisonRequest } from './types.js';
+import { HOUSING_MATERIALS, STEM_MATERIALS } from '../config/materialProperties.js';
+import { SwitchQueryService } from './switchQuery.js';
+import { ProcessedComparisonRequest } from '../types/comparison.js';
 
 export class MaterialComparisonService {
   private switchQueryService: SwitchQueryService;

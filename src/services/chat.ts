@@ -7,23 +7,24 @@ import {
   messages as messagesTable,
   switches as switchesTable
 } from '../db/schema.js';
-import { ChatRequest, ChatResponse, ChatMessage as UIChatMessage } from '../types/chat.js';
-import { CharacteristicsComparisonService } from './chat/comparison/characteristics.js';
-import { MaterialComparisonService } from './chat/comparison/materials.js';
+import { ChatRequest, ChatResponse, ChatMessage as UIChatMessage, StructuredContent } from '../types/chat.js';
+import { CharacteristicsComparisonService } from '../utils/characteristics.js';
+import { MaterialComparisonService } from '../utils/materials.js';
 import {
   ComparisonDataRetrievalResult,
   ComparisonIntent,
   ProcessedComparisonRequest,
   SwitchContextForPrompt
-} from './chat/comparison/types.js';
-import { DataRetrievalService } from './chat/database/dataRetrieval.js';
-// Import refactored services
-import { SwitchQueryService } from './chat/database/switchQuery.js';
+} from '../types/comparison.js';
+import { DataRetrievalService } from '../utils/dataRetrieval.js';
+import { SwitchQueryService } from '../utils/switchQuery.js';
 import { LocalEmbeddingService } from './embeddingsLocal.js';
 import { GeminiService } from './gemini.js';
 import { MaterialContextService } from './materialContext.js';
 import { PromptBuilder, type EnhancedSwitchData } from './promptBuilder.js';
+import { ResponseParserService } from './responseParser.js';
 import { SwitchResolutionService, type SwitchResolutionResult } from './switchResolution.js';
+import { ResponseType } from '../config/responseStructures.js';
 
 const embeddingService = new LocalEmbeddingService();
 const geminiService = new GeminiService();
@@ -32,15 +33,15 @@ export class ChatService {
   private switchResolutionService: SwitchResolutionService;
   private materialContextService: MaterialContextService;
 
-  // New refactored services
   private switchQueryService: SwitchQueryService;
   private dataRetrievalService: DataRetrievalService;
   private characteristicsComparisonService: CharacteristicsComparisonService;
   private materialComparisonService: MaterialComparisonService;
+  
+  private responseParserService: ResponseParserService;
 
   constructor() {
     try {
-      // Validate environment variables
       const geminiApiKey = process.env.GEMINI_API_KEY;
       if (!geminiApiKey) {
         console.error(
@@ -49,7 +50,6 @@ export class ChatService {
         console.error('Please ensure .env.local file contains: GEMINI_API_KEY=your_actual_api_key');
       }
 
-      // Initialize enhanced services with proper error handling
       console.log('Initializing ChatService enhanced components...');
 
       try {
@@ -72,7 +72,6 @@ export class ChatService {
         );
       }
 
-      // Initialize new refactored services
       try {
         this.switchQueryService = new SwitchQueryService();
         this.dataRetrievalService = new DataRetrievalService();
@@ -88,7 +87,17 @@ export class ChatService {
         );
       }
 
-      console.log('✓ ChatService fully initialized with enhanced comparison features');
+      try {
+        this.responseParserService = new ResponseParserService();
+        console.log('✓ ResponseParserService initialized');
+      } catch (error) {
+        console.error('✗ Failed to initialize ResponseParserService:', error);
+        throw new Error(
+          `ResponseParserService initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+
+      console.log('✓ ChatService fully initialized with enhanced comparison features and structured JSON response parsing');
     } catch (error) {
       console.error('FATAL: ChatService constructor failed:', error);
       throw error;
@@ -199,11 +208,11 @@ export class ChatService {
         try {
           extractedSwitchNames =
             await this.switchQueryService.parseAndExtractSwitchNames(userQuery);
-        } catch (embeddingError) {
-          console.warn(
+      } catch (embeddingError) {
+        console.warn(
             'Embedding service also failed, using pattern-only extraction:',
-            embeddingError
-          );
+          embeddingError
+        );
           extractedSwitchNames =
             await this.switchQueryService.extractPotentialSwitchNames(userQuery);
         }
@@ -506,8 +515,8 @@ export class ChatService {
         userFeedbackMessage +=
           "\n\nCould you please specify which switches you'd like me to compare? You can use full names like 'Cherry MX Red' or 'Gateron Oil King'.";
 
-        return {
-          isValidComparison: false,
+      return {
+        isValidComparison: false,
           switchesToCompare: validSwitches.map((s) => s.resolvedName),
           userFeedbackMessage,
           confidence: resolutionResult.confidence,
@@ -871,6 +880,90 @@ Focus on delivering valuable technical insights and practical guidance for mecha
     return characteristicKeywords.some((keyword) => queryLower.includes(keyword));
   }
 
+  /**
+   * Determine the appropriate response type based on comparison request characteristics
+   * Used to dispatch to the correct ResponseParserService transformer (Task 3.1)
+   * 
+   * @param comparisonRequest The processed comparison request
+   * @returns ResponseType for structured JSON transformation
+   */
+  private determineResponseType(comparisonRequest: ProcessedComparisonRequest): ResponseType {
+    console.log(`🔍 determineResponseType called with comparisonRequest.isValidComparison: ${comparisonRequest.isValidComparison}`);
+    
+    // Handle educational content types
+    if (comparisonRequest.isCharacteristicsExplanation) {
+      console.log(`📚 Detected characteristics explanation - returning 'characteristics_explanation'`);
+      return 'characteristics_explanation';
+    }
+    
+    if (comparisonRequest.isMaterialsExplanation) {
+      console.log(`🧪 Detected material explanation - returning 'material_analysis'`);
+      return 'material_analysis';
+    }
+    
+    // Handle switch comparison if valid
+    if (comparisonRequest.isValidComparison && comparisonRequest.switchesToCompare.length >= 2) {
+      console.log(`⚖️ Detected switch comparison with ${comparisonRequest.switchesToCompare.length} switches - returning 'switch_comparison'`);
+      return 'switch_comparison';
+    }
+    
+    // Default to standard RAG for other cases
+    console.log(`📄 Defaulting to standard RAG response type`);
+    return 'standard_rag';
+  }
+
+  /**
+   * Helper method to convert markdown response to structured content
+   * Integrates with ResponseParserService for JSON transformation (Task 3.2)
+   * 
+   * @param markdownText The raw markdown text from Gemini
+   * @param responseType The determined response type
+   * @param metadata Optional metadata to include
+   * @returns StructuredContent object
+   */
+  private processMarkdownToStructured(
+    markdownText: string,
+    responseType: ResponseType,
+    metadata?: Record<string, any>
+  ): StructuredContent {
+    console.log(`🔄 processMarkdownToStructured called with responseType: ${responseType}`);
+    console.log(`📝 Markdown length: ${markdownText.length} characters`);
+    
+    try {
+      const structuredContent = this.responseParserService.parse(
+        markdownText,
+        responseType,
+        metadata
+      );
+      
+      console.log(`✅ Successfully converted markdown to structured content: ${responseType}`);
+      return structuredContent;
+    } catch (error) {
+      console.error(`❌ Failed to parse markdown to structured content:`, error);
+      
+      // Fallback: return a basic structured response with raw markdown
+      return {
+        responseType: 'standard_rag',
+        data: {
+          title: 'Response',
+          queryType: 'other',
+          content: { mainAnswer: markdownText },
+          keyPoints: [],
+          sourceInformation: {
+            sourceTypes: ['general_knowledge'],
+            confidenceLevel: 'medium'
+          },
+          metadata: {
+            responseLength: 'detailed',
+            technicalLevel: 'intermediate'
+          }
+        },
+        version: '1.0.0',
+        generatedAt: new Date()
+      };
+    }
+  }
+
   /** Full RAG-powered message processing */
   async processMessage(userId: string, request: ChatRequest): Promise<ChatResponse> {
     const rawUserQuery = this.truncateText(request.message, AI_CONFIG.MAX_OUTPUT_TOKENS * 100);
@@ -1051,26 +1144,39 @@ Focus on delivering valuable technical insights and practical guidance for mecha
                 };
               }
 
-              // Save successful characteristics explanation
+              // Convert markdown response to structured JSON (Task 3.2)
+              const responseType = this.determineResponseType(comparisonRequest);
+              const structuredContent = this.processMarkdownToStructured(
+                assistantText,
+                responseType,
+                {
+                  characteristicsExplanation: true,
+                  exampleSwitchesCount: Object.values(comparisonRequest.characteristicsExamples).flat().length,
+                  processingNote: comparisonRequest.processingNote
+                }
+              );
+
+              // Save successful characteristics explanation with structured content
               const [assistantMsgRecord] = await db
                 .insert(messagesTable)
                 .values({
                   conversationId: currentConversationId,
                   userId,
-                  content: assistantText,
+                  content: JSON.stringify(structuredContent),
                   role: 'assistant',
                   metadata: {
                     model: AI_CONFIG.GEMINI_MODEL,
                     isComparison: false, // This is education, not comparison
                     comparisonValid: true,
                     comparisonConfidence: comparisonRequest.confidence,
-                    characteristicsExplanation: true,
                     educationalContent: true,
                     processingNote: comparisonRequest.processingNote,
                     promptLength: prompt.length,
                     exampleSwitchesCount: Object.values(
                       comparisonRequest.characteristicsExamples
-                    ).flat().length
+                    ).flat().length,
+                    responseType: structuredContent.responseType,
+                    structuredResponse: true
                   },
                   createdAt: new Date(),
                   timestamp: new Date()
@@ -1085,7 +1191,7 @@ Focus on delivering valuable technical insights and practical guidance for mecha
               return {
                 id: assistantMsgRecord.id,
                 role: 'assistant',
-                content: assistantText,
+                content: structuredContent,
                 metadata: assistantMsgRecord.metadata as Record<string, any>
               };
             } catch (error) {
@@ -1156,25 +1262,38 @@ Focus on delivering valuable technical insights and practical guidance for mecha
                 };
               }
 
-              // Save successful material explanation
+              // Convert markdown response to structured JSON (Task 3.2)
+              const responseType = this.determineResponseType(comparisonRequest);
+              const structuredContent = this.processMarkdownToStructured(
+                assistantText,
+                responseType,
+                {
+                  materialExplanation: true,
+                  exampleSwitchesCount: Object.values(comparisonRequest.materialExamples).flat().length,
+                  processingNote: comparisonRequest.processingNote
+                }
+              );
+
+              // Save successful material explanation with structured content
               const [assistantMsgRecord] = await db
                 .insert(messagesTable)
                 .values({
                   conversationId: currentConversationId,
                   userId,
-                  content: assistantText,
+                  content: JSON.stringify(structuredContent),
                   role: 'assistant',
                   metadata: {
                     model: AI_CONFIG.GEMINI_MODEL,
                     isComparison: false, // This is education, not comparison
                     comparisonValid: true,
                     comparisonConfidence: comparisonRequest.confidence,
-                    materialExplanation: true,
                     educationalContent: true,
                     processingNote: comparisonRequest.processingNote,
                     promptLength: prompt.length,
                     exampleSwitchesCount: Object.values(comparisonRequest.materialExamples).flat()
-                      .length
+                      .length,
+                    responseType: structuredContent.responseType,
+                    structuredResponse: true
                   },
                   createdAt: new Date(),
                   timestamp: new Date()
@@ -1189,7 +1308,7 @@ Focus on delivering valuable technical insights and practical guidance for mecha
               return {
                 id: assistantMsgRecord.id,
                 role: 'assistant',
-                content: assistantText,
+                content: structuredContent,
                 metadata: assistantMsgRecord.metadata as Record<string, any>
               };
             } catch (error) {
@@ -1213,7 +1332,6 @@ Focus on delivering valuable technical insights and practical guidance for mecha
             console.log(`✅ Data retrieval completed:`, {
               allSwitchesFound: retrievalResult.allSwitchesFound,
               foundSwitches: retrievalResult.switchesData.filter((s) => s.isFound).length,
-              missingSwitches: retrievalResult.missingSwitches.length,
               hasDataGaps: retrievalResult.hasDataGaps
             });
           } catch (retrievalError) {
@@ -1331,13 +1449,26 @@ Focus on delivering valuable technical insights and practical guidance for mecha
                 };
               }
 
-              // Save successful AI fallback response
+              // Convert markdown response to structured JSON (Task 3.2)
+              const responseType = this.determineResponseType(comparisonRequest);
+              const structuredContent = this.processMarkdownToStructured(
+                assistantText,
+                responseType,
+                {
+                  aiFallback: true,
+                  noDatabase: true,
+                  requestedSwitches: comparisonRequest.switchesToCompare,
+                  resolutionMethod: comparisonRequest.resolutionResult?.resolutionMethod
+                }
+              );
+
+              // Save successful AI fallback response with structured content
               const [assistantMsgRecord] = await db
                 .insert(messagesTable)
                 .values({
                   conversationId: currentConversationId,
                   userId,
-                  content: assistantText,
+                  content: JSON.stringify(structuredContent),
                   role: 'assistant',
                   metadata: {
                     model: AI_CONFIG.GEMINI_MODEL,
@@ -1346,10 +1477,11 @@ Focus on delivering valuable technical insights and practical guidance for mecha
                     comparisonConfidence: comparisonRequest.confidence,
                     aiFallback: true,
                     noDatabase: true,
-                    requestedSwitches: comparisonRequest.switchesToCompare,
                     resolutionMethod: comparisonRequest.resolutionResult?.resolutionMethod,
                     processingNote: comparisonRequest.processingNote,
-                    promptLength: aiPrompt.length
+                    promptLength: aiPrompt.length,
+                    responseType: structuredContent.responseType,
+                    structuredResponse: true
                   },
                   createdAt: new Date(),
                   timestamp: new Date()
@@ -1364,7 +1496,7 @@ Focus on delivering valuable technical insights and practical guidance for mecha
               return {
                 id: assistantMsgRecord.id,
                 role: 'assistant',
-                content: assistantText,
+                content: structuredContent,
                 metadata: assistantMsgRecord.metadata as Record<string, any>
               };
             } catch (aiFallbackError) {
@@ -1463,8 +1595,6 @@ Focus on delivering valuable technical insights and practical guidance for mecha
                       isComparison: true,
                       comparisonValid: false,
                       error: 'insufficient_switches_found',
-                      foundSwitches: [foundSwitch.name],
-                      missingSwitches: retrievalResult.missingSwitches,
                       aiFallbackAttempted: true,
                       aiFallbackFailed: true
                     },
@@ -1487,25 +1617,36 @@ Focus on delivering valuable technical insights and practical guidance for mecha
                 };
               }
 
-              // Save successful enhanced response
+              // Convert markdown response to structured JSON (Task 3.2)
+              const responseType = this.determineResponseType(comparisonRequest);
+              const structuredContent = this.processMarkdownToStructured(
+                assistantText,
+                responseType,
+                {
+                  enhancedWithAI: true,
+                  partialDatabase: true,
+                }
+              );
+
+              // Save successful enhanced response with structured content
               console.log(`💾 Saving enhanced single switch + AI response to database...`);
               const [assistantMsgRecord] = await db
                 .insert(messagesTable)
                 .values({
                   conversationId: currentConversationId,
                   userId,
-                  content: assistantText,
+                  content: JSON.stringify(structuredContent),
                   role: 'assistant',
                   metadata: {
                     model: AI_CONFIG.GEMINI_MODEL,
                     isComparison: true,
                     comparisonValid: true,
                     comparisonConfidence: comparisonRequest.confidence,
-                    foundSwitches: [foundSwitch.name],
-                    missingSwitches: retrievalResult.missingSwitches,
                     enhancedWithAI: true,
                     partialDatabase: true,
-                    promptLength: enhancedPrompt.length
+                    promptLength: enhancedPrompt.length,
+                    responseType: structuredContent.responseType,
+                    structuredResponse: true
                   },
                   createdAt: new Date(),
                   timestamp: new Date()
@@ -1521,7 +1662,7 @@ Focus on delivering valuable technical insights and practical guidance for mecha
               return {
                 id: assistantMsgRecord.id,
                 role: 'assistant',
-                content: assistantText,
+                content: structuredContent,
                 metadata: assistantMsgRecord.metadata as Record<string, any>
               };
             } catch (aiError) {
@@ -1548,8 +1689,6 @@ Focus on delivering valuable technical insights and practical guidance for mecha
                   isComparison: true,
                   comparisonValid: false,
                   error: 'insufficient_switches_found',
-                  foundSwitches: [foundSwitch.name],
-                  missingSwitches: retrievalResult.missingSwitches
                 },
                 createdAt: new Date(),
                 timestamp: new Date()
@@ -1661,50 +1800,50 @@ Focus on delivering valuable technical insights and practical guidance for mecha
             console.error('Error building enhanced comparison prompt:', promptError);
 
             // Fallback to legacy prompt builder
-            try {
-              comparisonPrompt = PromptBuilder.buildComparisonPrompt(
-                historyForPrompt,
-                formattedData.switchDataBlocks,
-                formattedData.promptInstructions,
-                rawUserQuery,
-                comparisonRequest.switchesToCompare
-              );
+          try {
+            comparisonPrompt = PromptBuilder.buildComparisonPrompt(
+              historyForPrompt,
+              formattedData.switchDataBlocks,
+              formattedData.promptInstructions,
+              rawUserQuery,
+              comparisonRequest.switchesToCompare
+            );
             } catch (fallbackError) {
               console.error('Even fallback prompt building failed:', fallbackError);
-              const assistantText = AI_CONFIG.FALLBACK_ERROR_MESSAGE_INTERNAL;
+            const assistantText = AI_CONFIG.FALLBACK_ERROR_MESSAGE_INTERNAL;
 
-              const [assistantMsgRecord] = await db
-                .insert(messagesTable)
-                .values({
-                  conversationId: currentConversationId,
-                  userId,
-                  content: assistantText,
-                  role: 'assistant',
-                  metadata: {
-                    model: AI_CONFIG.GEMINI_MODEL,
-                    isComparison: true,
-                    error: 'prompt_building_failure',
-                    errorDetails:
+            const [assistantMsgRecord] = await db
+              .insert(messagesTable)
+              .values({
+                conversationId: currentConversationId,
+                userId,
+                content: assistantText,
+                role: 'assistant',
+                metadata: {
+                  model: AI_CONFIG.GEMINI_MODEL,
+                  isComparison: true,
+                  error: 'prompt_building_failure',
+                  errorDetails:
                       fallbackError instanceof Error
                         ? fallbackError.message
                         : 'Unknown prompt error'
-                  },
-                  createdAt: new Date(),
-                  timestamp: new Date()
-                })
-                .returning();
+                },
+                createdAt: new Date(),
+                timestamp: new Date()
+              })
+              .returning();
 
-              await db
-                .update(conversations)
-                .set({ updatedAt: new Date() })
-                .where(eq(conversations.id, currentConversationId));
+            await db
+              .update(conversations)
+              .set({ updatedAt: new Date() })
+              .where(eq(conversations.id, currentConversationId));
 
-              return {
-                id: assistantMsgRecord.id,
-                role: 'assistant',
-                content: assistantText,
-                metadata: assistantMsgRecord.metadata as Record<string, any>
-              };
+            return {
+              id: assistantMsgRecord.id,
+              role: 'assistant',
+              content: assistantText,
+              metadata: assistantMsgRecord.metadata as Record<string, any>
+            };
             }
           }
 
@@ -1727,7 +1866,6 @@ Focus on delivering valuable technical insights and practical guidance for mecha
                   isComparison: true,
                   comparisonValid: true,
                   error: 'llm_generation_failure',
-                  switchesCompared: comparisonRequest.switchesToCompare,
                   switchesFoundInDB: foundSwitches.map((s) => s.name)
                 },
                 createdAt: new Date(),
@@ -1748,22 +1886,32 @@ Focus on delivering valuable technical insights and practical guidance for mecha
             };
           }
 
-          // Save successful assistant response with comprehensive metadata
+          // Convert markdown response to structured JSON (Task 3.2)
+          const responseType = this.determineResponseType(comparisonRequest);
+          const structuredContent = this.processMarkdownToStructured(
+            assistantText,
+            responseType,
+            {
+              hasDataGaps: retrievalResult.hasDataGaps,
+              enhancedComparison: true,
+              materialContextApplied: enhancedSwitchData.some((s) => s.materialData),
+              detectedUseCase
+            }
+          );
+
+          // Save successful assistant response with comprehensive metadata and structured content
           const [assistantMsgRecord] = await db
             .insert(messagesTable)
             .values({
               conversationId: currentConversationId,
               userId,
-              content: assistantText,
+              content: JSON.stringify(structuredContent),
               role: 'assistant',
               metadata: {
                 model: AI_CONFIG.GEMINI_MODEL,
                 isComparison: true,
                 comparisonValid: true,
                 comparisonConfidence: comparisonRequest.confidence,
-                switchesCompared: comparisonRequest.switchesToCompare,
-                switchesFoundInDB: foundSwitches.map((s) => s.name),
-                missingSwitches: retrievalResult.missingSwitches,
                 hasDataGaps: retrievalResult.hasDataGaps,
                 promptLength: comparisonPrompt.length,
                 retrievalNotes: retrievalResult.retrievalNotes,
@@ -1773,7 +1921,9 @@ Focus on delivering valuable technical insights and practical guidance for mecha
                 materialContextApplied: enhancedSwitchData.some((s) => s.materialData),
                 detectedUseCase,
                 enhancedComparison: true,
-                processingNote: comparisonRequest.processingNote
+                processingNote: comparisonRequest.processingNote,
+                responseType: structuredContent.responseType,
+                structuredResponse: true
               },
               createdAt: new Date(),
               timestamp: new Date()
@@ -1789,7 +1939,7 @@ Focus on delivering valuable technical insights and practical guidance for mecha
           return {
             id: assistantMsgRecord.id,
             role: 'assistant',
-            content: assistantText,
+            content: structuredContent,
             metadata: assistantMsgRecord.metadata as Record<string, any>
           };
         } catch (comparisonError) {
@@ -1833,17 +1983,29 @@ Focus on delivering valuable technical insights and practical guidance for mecha
         // ** STANDARD RAG FLOW **
         const assistantText = await this.processStandardRAG(rawUserQuery, currentConversationId);
 
-        // Save assistant response
+        // Convert markdown response to structured JSON (Task 3.2)
+        const structuredContent = this.processMarkdownToStructured(
+          assistantText,
+          'standard_rag',
+          {
+            queryType: 'general',
+            isComparison: false
+          }
+        );
+
+        // Save assistant response with structured content
         const [assistantMsgRecord] = await db
           .insert(messagesTable)
           .values({
             conversationId: currentConversationId,
             userId,
-            content: assistantText,
+            content: JSON.stringify(structuredContent),
             role: 'assistant',
             metadata: {
               model: AI_CONFIG.GEMINI_MODEL,
-              isComparison: false
+              isComparison: false,
+              responseType: structuredContent.responseType,
+              structuredResponse: true
             },
             createdAt: new Date(),
             timestamp: new Date()
@@ -1859,7 +2021,7 @@ Focus on delivering valuable technical insights and practical guidance for mecha
         return {
           id: assistantMsgRecord.id,
           role: 'assistant',
-          content: assistantText,
+          content: structuredContent,
           metadata: assistantMsgRecord.metadata as Record<string, any>
         };
       }
@@ -1921,8 +2083,8 @@ Focus on delivering valuable technical insights and practical guidance for mecha
     // 5) Fetch recent history
     const historyForPrompt = await this.getConversationHistoryForPrompt(currentConversationId);
 
-    // 6) Build prompt using the new PromptBuilder and structured config
-    const prompt = PromptBuilder.buildPrompt(
+    // 6) Build prompt using the new enhanced PromptBuilder for comprehensive AI-powered responses
+    const prompt = PromptBuilder.buildEnhancedStandardRAGPrompt(
       historyForPrompt,
       switchContextsForPrompt,
       rawUserQuery
@@ -1948,13 +2110,31 @@ Focus on delivering valuable technical insights and practical guidance for mecha
       .where(eq(messagesTable.conversationId, conversationId))
       .orderBy(messagesTable.timestamp);
 
-    return history.map((msg) => ({
-      id: msg.id,
-      role: msg.role as 'user' | 'assistant',
-      content: msg.content,
-      metadata: msg.metadata as Record<string, any> | undefined,
-      createdAt: msg.timestamp
-    }));
+    return history.map((msg) => {
+      let content: StructuredContent | string = msg.content;
+      
+      // Try to parse JSON content for structured responses (Task 3.3)
+      if (typeof msg.content === 'string' && msg.content.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(msg.content);
+          // Check if it's a structured content object
+          if (parsed.responseType && parsed.data && parsed.version && parsed.generatedAt) {
+            content = parsed as StructuredContent;
+          }
+        } catch (error) {
+          // If parsing fails, keep as string (legacy content)
+          console.log(`Failed to parse structured content for message ${msg.id}, keeping as string`);
+        }
+      }
+
+      return {
+        id: msg.id,
+        role: msg.role as 'user' | 'assistant',
+        content,
+        metadata: msg.metadata as Record<string, any> | undefined,
+        createdAt: msg.timestamp
+      };
+    });
   }
 
   async listConversations(userId: string) {
@@ -1985,4 +2165,5 @@ Focus on delivering valuable technical insights and practical guidance for mecha
     await db.delete(messagesTable).where(eq(messagesTable.conversationId, conversationId));
     await db.delete(conversations).where(eq(conversations.id, conversationId));
   }
+
 }

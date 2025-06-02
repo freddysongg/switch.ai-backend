@@ -1,9 +1,9 @@
 import { eq, sql } from 'drizzle-orm';
 
-import { db } from '../../../db/index.js';
-import { switches as switchesTable } from '../../../db/schema.js';
-import { LocalEmbeddingService } from '../../embeddingsLocal.js';
-import { ComparisonDataRetrievalResult, ComprehensiveSwitchData } from '../comparison/types.js';
+import { db } from '../db/index.js';
+import { switches as switchesTable } from '../db/schema.js';
+import { LocalEmbeddingService } from '../services/embeddingsLocal.js';
+import { ComparisonDataRetrievalResult, ComprehensiveSwitchData } from '../types/comparison.js';
 
 export class DataRetrievalService {
   private embeddingService: LocalEmbeddingService;
@@ -29,11 +29,11 @@ export class DataRetrievalService {
 
     if (switchNames.length === 0) {
       console.log(`⚠️ No switch names provided - returning empty result`);
-      return {
-        switchesData: [],
-        allSwitchesFound: false,
+    return {
+      switchesData: [],
+      allSwitchesFound: false,
         missingSwitches: [],
-        hasDataGaps: false,
+      hasDataGaps: false,
         retrievalNotes: ['No switch names provided for retrieval']
       };
     }
@@ -293,7 +293,7 @@ export class DataRetrievalService {
       console.log(
         `📄 Processing switch data block for: ${switchData.name} (found: ${switchData.isFound})`
       );
-
+      
       if (switchData.isFound) {
         let dataBlock = `SWITCH_NAME: ${switchData.name}\n`;
         dataBlock += `MANUFACTURER: ${switchData.manufacturer || 'N/A'}\n`;
@@ -321,11 +321,11 @@ export class DataRetrievalService {
           `✅ Data block created for ${switchData.name} (${dataBlock.length} characters)`
         );
       } else {
-        const notFoundBlock =
+        const notFoundBlock = 
           `SWITCH_NAME: ${switchData.originalQuery}\n` +
           `DATABASE_STATUS: Not found in database\n` +
           `NOTE: This switch was not found in our database. General knowledge may be used if available.\n`;
-
+          
         switchDataBlocks.push(notFoundBlock);
         console.log(`⚠️ Not-found block created for ${switchData.originalQuery}`);
       }
@@ -371,7 +371,7 @@ export class DataRetrievalService {
       hasIncompleteData: !allSwitchesFound || hasDataGaps,
       promptInstructions: promptInstructions.trim()
     };
-
+    
     console.log(`✅ formatMissingDataForPrompt completed successfully:`, {
       missingDataSummaryLength: result.missingDataSummary.length,
       switchDataBlocksCount: result.switchDataBlocks.length,
@@ -381,4 +381,4 @@ export class DataRetrievalService {
 
     return result;
   }
-}
+} 

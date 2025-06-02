@@ -1,7 +1,34 @@
+import {
+  SwitchComparisonResponse,
+  CharacteristicsExplanationResponse,
+  MaterialAnalysisResponse,
+  StandardRAGResponse
+} from '../config/responseStructures.js';
+
+/**
+ * Structured content interface to replace simple string content
+ * Supports multiple response types with structured JSON data
+ */
+export interface StructuredContent {
+  responseType: 'switch_comparison' | 'characteristics_explanation' | 'material_analysis' | 'standard_rag';
+  data: SwitchComparisonResponse | CharacteristicsExplanationResponse | MaterialAnalysisResponse | StandardRAGResponse;
+  version: string; 
+  generatedAt: Date;
+  metadata?: Record<string, any>;
+  error?: {
+    errorType: string;
+    errorMessage: string;
+    timestamp: string;
+    markdownLength: number;
+    hasBasicStructure?: any;
+  };
+  isFallback?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
-  content: string;
+  content: StructuredContent | string; 
   metadata?: Record<string, any>;
   createdAt: Date;
 }
@@ -22,7 +49,7 @@ export interface ChatRequest {
 export interface ChatResponse {
   id: string;
   role: 'assistant';
-  content: string;
+  content: StructuredContent | string; 
   metadata?: Record<string, any>;
 }
 
