@@ -27,6 +27,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 .pnpm-debug.log*
+tasks/
 
 # Editor directories and files
 .idea/
@@ -52,6 +53,7 @@ Thumbs.db
 # Testing
 coverage/
 .nyc_output/
+testing/
 
 # Temporary files
 *.tmp

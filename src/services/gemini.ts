@@ -7,6 +7,8 @@ import {
 } from '@google/generative-ai';
 
 import { AI_CONFIG } from '../config/ai.config.js';
+import type { QueryIntent } from '../types/analysisTypes.js';
+import { classifyError, createErrorResponse, logError } from '../utils/errorHandler.js';
 
 export class GeminiService {
   private model: GenerativeModel;
@@ -48,47 +50,39 @@ export class GeminiService {
 
   /**
    * Send a single-shot prompt to Gemini and return the generated text.
-   * Uses fallback message on error or empty/problematic response.
+   * Uses enhanced error handling with structured fallback responses.
    * @param prompt The complete prompt string for the LLM.
    * @param requestSpecificGenConfig Optional generation config to override defaults for this specific call.
+   * @param context Optional context for better error handling (intent, query).
    */
   async generate(
     prompt: string,
-    requestSpecificGenConfig?: Partial<GenerationConfig>
+    requestSpecificGenConfig?: Partial<GenerationConfig>,
+    context?: { intent?: QueryIntent; query?: string }
   ): Promise<string> {
     try {
-      // For single-turn, non-chat interactions, generateContent is often more direct.
-      // If using startChat for potential future multi-turn within a single call, it's also fine.
-      // The user's previous version used startChat. Let's stick to that for consistency with their example.
       const chat = this.model.startChat({
-        history: [], // For single prompt, history is empty
-        generationConfig: requestSpecificGenConfig // Allow overriding generation config per request
+        history: [],
+        generationConfig: requestSpecificGenConfig
       });
 
       const result = await chat.sendMessage(prompt);
-      // const result = await this.model.generateContent({
-      //   contents: [{ role: "user", parts: [{ text: prompt }] }],
-      //   generationConfig: { ...this.model.generationConfig, ...requestSpecificGenConfig }, // Merge configs
-      // });
-
       const response = result.response;
-      // const response = result.response;
 
       if (!response) {
         console.warn('Gemini API returned no response object.');
-        return AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM;
+        return this.handleGeminiError(new Error('No response object from Gemini API'), context);
       }
 
       if (!response.candidates || response.candidates.length === 0) {
         console.warn('Gemini API returned no candidates in response.');
-        // Check for promptFeedback if available and it indicates blockage
         if (response.promptFeedback && response.promptFeedback.blockReason) {
           console.warn(
             `Prompt blocked by Gemini API due to: ${response.promptFeedback.blockReason}`
           );
           return `I am unable to respond to this query as it was blocked due to: ${response.promptFeedback.blockReason}.`;
         }
-        return AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM;
+        return this.handleGeminiError(new Error('No candidates in response'), context);
       }
 
       const candidate = response.candidates[0];
@@ -101,15 +95,44 @@ export class GeminiService {
         if (candidate.finishReason === 'SAFETY') {
           return "I'm sorry, I cannot provide a response to that query due to safety guidelines.";
         }
-        return AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM;
+        return this.handleGeminiError(
+          new Error(`Generation finished: ${candidate.finishReason}`),
+          context
+        );
       }
 
       const text = (candidate.content?.parts?.map((part) => part.text).join('') || '').trim();
 
-      return text.length > 0 ? text : AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM; // Return fallback if text is empty after trim
+      return text.length > 0
+        ? text
+        : this.handleGeminiError(new Error('Empty response text'), context);
     } catch (error: any) {
       console.error('GeminiService error during generation:', error.message || error);
-      return AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM;
+      return this.handleGeminiError(error, context);
     }
+  }
+
+  /**
+   * Enhanced error handling that provides structured responses instead of generic fallback
+   */
+  private handleGeminiError(
+    error: any,
+    context?: { intent?: QueryIntent; query?: string }
+  ): string {
+    const classification = classifyError(error, { source: 'GeminiService' });
+
+    logError(classification, context);
+
+    if (classification.type === 'api_quota_exceeded' && context) {
+      const errorResponse = createErrorResponse(
+        classification,
+        context.intent || 'general_switch_info',
+        context.query
+      );
+
+      return JSON.stringify(errorResponse, null, 2);
+    }
+
+    return AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM;
   }
 }

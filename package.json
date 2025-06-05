@@ -3,8 +3,8 @@
 	"version": "1.0.0",
 	"type": "module",
 	"scripts": {
-		"dev": "dotenvx run --env-file .env.local -- tsx watch src/index.ts",
-		"start": "dotenvx run --env-file .env.production -- node dist/index.js",
+		"dev": "node --watch src/index.js",
+		"start": "node src/index.js",
 		"build": "tsc",
 		"format": "prettier --write \"src/**/*.ts\"",
 		"format:check": "prettier --check \"src/**/*.ts\"",
@@ -21,7 +21,18 @@
 		"db:push": "drizzle-kit push",
 		"supabase:start": "supabase start",
 		"supabase:stop": "supabase stop",
-		"supabase:status": "supabase status"
+		"supabase:status": "supabase status",
+		"test": "dotenvx run --env-file .env.local -- node testing/scripts/enhanced-test-runner.js",
+		"test:quick": "dotenvx run --env-file .env.local -- node testing/scripts/quick-test.js",
+		"test:status": "dotenvx run --env-file .env.local -- node testing/scripts/quick-test.js --status",
+		"test:intent": "dotenvx run --env-file .env.local -- node testing/scripts/quick-test.js intent-recognition",
+		"test:quality": "dotenvx run --env-file .env.local -- node testing/scripts/quick-test.js content-quality",
+		"test:structure": "dotenvx run --env-file .env.local -- node testing/scripts/quick-test.js response-structure",
+		"test:edge": "dotenvx run --env-file .env.local -- node testing/scripts/quick-test.js edge-cases",
+		"test:ux": "dotenvx run --env-file .env.local -- node testing/scripts/quick-test.js user-experience",
+		"test:db": "dotenvx run --env-file .env.local -- node testing/scripts/quick-test.js database-integration",
+		"test:regression": "dotenvx run --env-file .env.local -- node testing/scripts/quick-test.js regression",
+		"test:cleanup": "rm -rf testing/reports/* testing/data/* testing/temp/*"
 	},
 	"devDependencies": {
 		"@dotenvx/dotenvx": "^1.44.1",
@@ -40,6 +51,7 @@
 		"drizzle-orm": "^0.44.0",
 		"figlet": "^1.7.0",
 		"gradient-string": "^3.0.0",
+		"node-fetch": "^3.3.2",
 		"postgres": "^3.4.7",
 		"prettier": "^3.5.3",
 		"prettier-plugin-tailwindcss": "^0.6.11",
