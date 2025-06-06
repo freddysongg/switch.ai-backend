@@ -191,11 +191,16 @@ export interface AnalysisError {
     | 'RESPONSE_VALIDATION_FAILED'
     | 'TIMEOUT'
     | 'RATE_LIMITED'
-    | 'INTERNAL_ERROR';
+    | 'INTERNAL_ERROR'
+    | 'NETWORK_ERROR'
+    | 'AUTHENTICATION_ERROR'
+    | 'QUOTA_EXCEEDED';
   message: string;
   step?: string;
   details?: any;
   recoverable: boolean;
+  timestamp?: Date;
+  retryDelay?: number;
 }
 
 // Type for communicating the structure to the LLM

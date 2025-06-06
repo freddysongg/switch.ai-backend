@@ -53,8 +53,8 @@
   - [x] 4.5 Develop mechanisms in `promptHelper.ts` or `llmAnalysisService.ts` to effectively communicate the JSON structure from `responseStructure.ts` to the LLM (addresses OQ4, TC1).
 
 - [ ] 5.0 Implement Logging, Error Handling, and Final Integrations
-  - [ ] 5.1 Integrate detailed console logging using `loggingHelper.ts` at key stages: query receipt, intent determination, DB lookup, prompt construction, raw LLM response (FR5.1, FR5.2, FR5.3, TC5).
-  - [ ] 5.2 Implement robust error handling in `analysisController.ts` and `llmAnalysisService.ts` to return user-friendly JSON error messages if unrecoverable errors occur (FR6.1).
+  - [x] 5.1 Integrate detailed console logging using `loggingHelper.ts` at key stages: query receipt, intent determination, DB lookup, prompt construction, raw LLM response (FR5.1, FR5.2, FR5.3, TC5).
+  - [x] 5.2 Implement robust error handling in `analysisController.ts` and `llmAnalysisService.ts` to return user-friendly JSON error messages if unrecoverable errors occur (FR6.1).
   - [ ] 5.3 Ensure the system falls back to simpler messages or an error indication if detailed analysis fails (FR6.2).
   - [x] 5.4 Define API endpoints in `analysisRoutes.ts` and register them in `index.ts`.
   - [x] 5.5 Conduct thorough manual testing for various query types and edge cases (SM1).

@@ -15,6 +15,7 @@ import type {
   DatabaseSwitchData,
   NormalizationResult
 } from '../types/analysisTypes.js';
+import { LoggingHelper } from '../utils/loggingHelper.js';
 import { LocalEmbeddingService } from './embeddingsLocal.js';
 import { GeminiService } from './gemini.js';
 
@@ -34,6 +35,7 @@ export class DatabaseService {
    * Uses multiple lookup strategies with graceful fallback handling
    * @param switchNames Array of switch names to lookup
    * @param options Lookup configuration options
+   * @param requestId Optional request ID for logging
    * @returns Database context with lookup results and quality analysis
    */
   async fetchSwitchSpecifications(
@@ -44,8 +46,10 @@ export class DatabaseService {
       enableEmbeddingSearch?: boolean;
       enableFuzzyMatching?: boolean;
       enableLLMNormalization?: boolean;
-    } = {}
+    } = {},
+    requestId?: string
   ): Promise<DatabaseContext> {
+    const startTime = Date.now();
     const {
       confidenceThreshold = 0.5,
       maxSwitchesPerLookup = 5,
@@ -131,16 +135,23 @@ export class DatabaseService {
     }
 
     const totalFound = lookupResults.filter((result) => result.found).length;
+    const lookupTimeMs = Date.now() - startTime;
 
     console.log(
       `DatabaseService: Lookup completed. Found ${totalFound}/${limitedSwitchNames.length} switches`
     );
 
-    return {
+    const databaseContext: DatabaseContext = {
       switches: lookupResults,
       totalFound,
       totalRequested: limitedSwitchNames.length
     };
+
+    if (requestId) {
+      LoggingHelper.logDatabaseLookup(requestId, databaseContext, lookupTimeMs);
+    }
+
+    return databaseContext;
   }
 
   /**

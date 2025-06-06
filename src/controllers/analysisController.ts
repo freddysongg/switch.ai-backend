@@ -225,38 +225,141 @@ export class AnalysisController {
       const userId = req.user?.id;
 
       if (!userId) {
-        res.status(401).json({ error: 'Unauthorized' });
+        const authError: AnalysisError = {
+          code: 'AUTHENTICATION_ERROR',
+          message: 'Authentication required to access the analysis service.',
+          recoverable: false,
+          timestamp: new Date()
+        };
+        this.handleAnalysisError(res, authError, requestId);
         return;
       }
 
       if (!query || typeof query !== 'string' || query.trim() === '') {
-        res.status(400).json({
-          error: 'Query is required and must be a non-empty string.'
-        });
+        const invalidQueryError: AnalysisError = {
+          code: 'INVALID_QUERY',
+          message: 'Query is required and must be a non-empty string.',
+          recoverable: true,
+          step: 'input_validation',
+          timestamp: new Date(),
+          details: {
+            field: 'query',
+            expectedType: 'non-empty string',
+            receivedType: typeof query,
+            guidance: 'Provide a clear question about keyboard switches'
+          }
+        };
+        this.handleAnalysisError(res, invalidQueryError, requestId);
         return;
       }
 
-      // TODO: Implement intent recognition
-      // 1. Call LLMAnalysisService.recognizeIntent()
-      // 2. Return structured intent result
+      if (query.length > 2000) {
+        const lengthError: AnalysisError = {
+          code: 'INVALID_QUERY',
+          message: 'Query is too long. Please limit your question to 2000 characters or less.',
+          recoverable: true,
+          step: 'input_validation',
+          timestamp: new Date(),
+          details: {
+            currentLength: query.length,
+            maxLength: 2000,
+            guidance: 'Break down complex questions into simpler parts'
+          }
+        };
+        this.handleAnalysisError(res, lengthError, requestId);
+        return;
+      }
 
-      const intentResult = await llmAnalysisService.recognizeIntent(query.trim());
+      // Attempt intent recognition with enhanced error handling
+      let intentResult;
+      try {
+        intentResult = await llmAnalysisService.recognizeIntent(query.trim(), requestId);
+      } catch (intentError: any) {
+        let analysisError: AnalysisError;
+
+        if (intentError.message.includes('timeout')) {
+          analysisError = {
+            code: 'TIMEOUT',
+            message: 'Intent recognition took too long to complete. Please try with a simpler query.',
+            recoverable: true,
+            step: 'intent_recognition',
+            timestamp: new Date(),
+            retryDelay: 3000
+          };
+        } else if (intentError.message.includes('rate limit')) {
+          analysisError = {
+            code: 'RATE_LIMITED',
+            message: 'Too many intent recognition requests. Please wait before trying again.',
+            recoverable: true,
+            step: 'intent_recognition',
+            timestamp: new Date(),
+            retryDelay: 30000
+          };
+        } else {
+          analysisError = {
+            code: 'INTENT_RECOGNITION_FAILED',
+            message: 'Unable to understand your query. Please try rephrasing with specific switch names or clearer language.',
+            recoverable: true,
+            step: 'intent_recognition',
+            timestamp: new Date(),
+            retryDelay: 1000,
+            details: {
+              originalError: intentError.message,
+              suggestions: [
+                'Include specific switch names (e.g., "Cherry MX Red")',
+                'Ask about specific characteristics (sound, feel, force)',
+                'Use simpler, more direct language'
+              ]
+            }
+          };
+        }
+
+        this.handleAnalysisError(res, analysisError, requestId);
+        return;
+      }
+
+      // Validate intent result quality
+      if (!intentResult || !intentResult.intent || intentResult.confidence < 0.3) {
+        const lowConfidenceError: AnalysisError = {
+          code: 'INTENT_RECOGNITION_FAILED',
+          message: 'I had difficulty understanding your query. Please try being more specific about what you want to know.',
+          recoverable: true,
+          step: 'intent_validation',
+          timestamp: new Date(),
+          details: {
+            confidence: intentResult?.confidence || 0,
+            recognizedIntent: intentResult?.intent || 'unknown',
+            guidance: 'Use more specific switch names or ask about particular characteristics'
+          }
+        };
+        this.handleAnalysisError(res, lowConfidenceError, requestId);
+        return;
+      }
 
       res.json({
         requestId,
         intent: intentResult,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        confidence: intentResult.confidence,
+        processingQuality: intentResult.confidence >= 0.8 ? 'high' : intentResult.confidence >= 0.6 ? 'medium' : 'low'
       });
     } catch (error: any) {
-      LoggingHelper.logError(requestId, error, 'intent_recognition_error');
+      LoggingHelper.logError(requestId, error, 'intent_recognition_critical_error');
 
-      if (!res.headersSent) {
-        res.status(500).json({
-          error: 'Internal server error during intent recognition.',
-          requestId,
-          timestamp: new Date().toISOString()
-        });
-      }
+      const criticalError: AnalysisError = {
+        code: 'INTERNAL_ERROR',
+        message: 'A critical error occurred during intent recognition. Please try again or contact support.',
+        recoverable: true,
+        step: 'intent_recognition_critical',
+        timestamp: new Date(),
+        retryDelay: 5000,
+        details: {
+          errorType: error.name || 'Unknown',
+          guidance: 'If this error persists, please contact technical support'
+        }
+      };
+
+      this.handleAnalysisError(res, criticalError, requestId);
     }
   }
 
@@ -357,52 +460,123 @@ export class AnalysisController {
 
     // Determine appropriate status code based on error code
     let statusCode = 500;
-    let userMessage = 'An error occurred during analysis processing.';
+    let userMessage = error.message; // Use the user-friendly message from the error
+    let additionalContext: any = {};
 
     switch (error.code) {
       case 'INVALID_QUERY':
         statusCode = 400;
-        userMessage = 'Invalid request format or content.';
+        additionalContext.suggestions = [
+          'Ensure your query contains a clear question about switches',
+          'Include specific switch names for better results',
+          'Check query length (max 2000 characters)'
+        ];
         break;
       case 'INTENT_RECOGNITION_FAILED':
         statusCode = 422;
-        userMessage = 'Unable to understand the query intent.';
+        additionalContext.examples = [
+          'What are the differences between Cherry MX Red and Blue?',
+          'Tell me about Gateron Yellow switches',
+          'Compare linear vs tactile switches'
+        ];
         break;
       case 'DATABASE_ERROR':
         statusCode = 503;
-        userMessage = 'Database service temporarily unavailable.';
+        additionalContext.fallbackAvailable = true;
+        additionalContext.notice = 'Analysis will continue using general knowledge';
         break;
       case 'LLM_REQUEST_FAILED':
       case 'LLM_RESPONSE_INVALID':
         statusCode = 503;
-        userMessage = 'Analysis service temporarily unavailable.';
+        additionalContext.serviceStatus = 'temporarily_unavailable';
         break;
       case 'RESPONSE_VALIDATION_FAILED':
         statusCode = 500;
-        userMessage = 'Analysis completed but response format error occurred.';
+        additionalContext.userAction = 'Please try rephrasing your query or ask about a different topic';
         break;
       case 'TIMEOUT':
         statusCode = 504;
-        userMessage = 'Analysis request timed out. Please try again.';
+        additionalContext.suggestions = [
+          'Try asking about fewer switches at once',
+          'Simplify your query',
+          'Retry in a few moments'
+        ];
         break;
       case 'RATE_LIMITED':
         statusCode = 429;
-        userMessage = 'Too many requests. Please try again later.';
+        if (error.retryDelay) {
+          const retryAfterSeconds = Math.ceil(error.retryDelay / 1000);
+          res.set('Retry-After', retryAfterSeconds.toString());
+          additionalContext.retryAfter = retryAfterSeconds;
+        }
+        break;
+      case 'NETWORK_ERROR':
+        statusCode = 503;
+        additionalContext.networkIssue = true;
+        break;
+      case 'AUTHENTICATION_ERROR':
+        statusCode = 401;
+        additionalContext.requiresReauth = true;
+        break;
+      case 'QUOTA_EXCEEDED':
+        statusCode = 429;
+        if (error.retryDelay) {
+          const retryAfterSeconds = Math.ceil(error.retryDelay / 1000);
+          res.set('Retry-After', retryAfterSeconds.toString());
+          additionalContext.quotaReset = new Date(Date.now() + error.retryDelay).toISOString();
+        }
         break;
       default:
         statusCode = 500;
-        userMessage = 'Unexpected error during analysis.';
+        additionalContext.supportContact = 'Please contact support if this error persists';
+    }
+
+    // Enhanced error response structure
+    const errorResponse: any = {
+      error: userMessage,
+      errorCode: error.code,
+      requestId,
+      timestamp: new Date().toISOString(),
+      retryable: error.recoverable || false
+    };
+
+    // Add step-specific context if available
+    if (error.step) {
+      errorResponse.failedAt = error.step;
+    }
+
+    // Add additional context without sensitive information
+    if (Object.keys(additionalContext).length > 0) {
+      errorResponse.context = additionalContext;
+    }
+
+    // Add guidance if available in error details
+    if (error.details?.guidance) {
+      errorResponse.guidance = error.details.guidance;
+    }
+
+    // Add user suggestions if available
+    if (error.details?.suggestions) {
+      errorResponse.suggestions = error.details.suggestions;
+    }
+
+    // Add retry information for recoverable errors
+    if (error.recoverable && error.retryDelay) {
+      errorResponse.retryAfter = Math.ceil(error.retryDelay / 1000);
+    }
+
+    // Development mode: add more technical details
+    if (process.env.NODE_ENV === 'development' && error.details) {
+      errorResponse.debugInfo = {
+        errorType: error.details.errorType,
+        step: error.details.step,
+        ...(error.details.stackTrace && { stackTrace: error.details.stackTrace })
+      };
     }
 
     // Return structured error response
     if (!res.headersSent) {
-      res.status(statusCode).json({
-        error: userMessage,
-        requestId,
-        timestamp: new Date().toISOString(),
-        retryable: error.recoverable || false,
-        ...(error.details && { details: error.details })
-      });
+      res.status(statusCode).json(errorResponse);
     }
   }
 }
