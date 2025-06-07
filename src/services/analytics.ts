@@ -1,3 +1,4 @@
+/* eslint-disable unused-imports/no-unused-vars */
 import { and, asc, desc as drizzleDesc, eq, gte, ilike, lte, sql, SQL } from 'drizzle-orm';
 import { validate as isValidUUID } from 'uuid';
 
@@ -33,6 +34,7 @@ export class AdminAnalyticsService {
     if (startDate) {
       try {
         conditions.push(gte(analyticsEvents.createdAt, new Date(startDate)));
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (e) {
         throw new ValidationError('Invalid startDate format. Please use YYYY-MM-DD.');
       }
@@ -42,6 +44,7 @@ export class AdminAnalyticsService {
         const inclusiveEndDate = new Date(endDate);
         inclusiveEndDate.setDate(inclusiveEndDate.getDate() + 1);
         conditions.push(lte(analyticsEvents.createdAt, inclusiveEndDate));
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (e) {
         throw new ValidationError('Invalid endDate format. Please use YYYY-MM-DD.');
       }

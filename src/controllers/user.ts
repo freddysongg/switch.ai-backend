@@ -22,7 +22,7 @@ export class UserController {
       const users = await this.userService.getAllUsers();
       console.log(`GET /api/users - Response count:`, users.length);
       const safeUsers = users.map((u) => {
-        const { hashedPassword, ...rest } = u;
+        const { hashedPassword: _, ...rest } = u;
         return rest;
       });
       res.status(200).json(safeUsers);
@@ -53,7 +53,7 @@ export class UserController {
       }
       const user = await this.userService.getUserById(targetUserId);
       if (user) {
-        const { hashedPassword, ...safeUser } = user;
+        const { hashedPassword: _, ...safeUser } = user;
         console.log(`GET /api/users/${targetUserId} - Response:`, safeUser);
         res.status(200).json(safeUser);
       } else {
@@ -102,7 +102,7 @@ export class UserController {
 
       const updatedUser = await this.userService.updateUser(targetUserId, updateData);
       if (updatedUser) {
-        const { hashedPassword, ...safeUser } = updatedUser;
+        const { hashedPassword: _, ...safeUser } = updatedUser;
         console.log(`PUT /api/users/${targetUserId} - Response:`, safeUser);
         res.status(200).json(safeUser);
       } else {

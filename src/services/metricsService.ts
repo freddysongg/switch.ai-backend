@@ -5,23 +5,19 @@ export interface ResponseQualityMetrics {
   requestId: string;
   timestamp: Date;
 
-  // Accuracy Metrics
   databaseSpecAccuracy?: number;
   entityRecognitionAccuracy?: number;
   factVerificationScore?: number;
 
-  // Structure Metrics
   formatComplianceScore: number;
   sectionCompletenessScore: number;
   tableStructureScore?: number;
   contentOrganizationScore?: number;
 
-  // Content Quality
   technicalDetailPrecision?: number;
   relevanceScore?: number;
   comprehensivenessScore?: number;
 
-  // Manual Rating (for ground truth)
   manualQualityRating?: number;
   manualComments?: string;
 }
@@ -30,17 +26,14 @@ export interface UserExperienceMetrics {
   requestId: string;
   timestamp: Date;
 
-  // Intent Understanding
   intentClassificationAccuracy: boolean;
   switchNameExtractionF1?: number;
   queryType: 'comparison' | 'general_info' | 'material_analysis' | 'follow_up' | 'unknown';
 
-  // Response Relevance
   queryResponseRelevance?: number;
   contextPreservationScore?: number;
   recommendationQuality?: number;
 
-  // User Satisfaction
   userSatisfactionRating?: number;
   wasHelpful?: boolean;
   userFeedback?: string;
@@ -50,12 +43,10 @@ export interface TechnicalPerformanceMetrics {
   requestId: string;
   timestamp: Date;
 
-  // Database Performance
   databaseHitRate: number;
   dataCompletenessScore: number;
   databaseResponseTime: number;
 
-  // LLM Performance
   llmResponseTime: number;
   tokenUsage: {
     promptTokens: number;
@@ -63,12 +54,10 @@ export interface TechnicalPerformanceMetrics {
     totalTokens: number;
   };
 
-  // System Performance
   totalResponseTime: number;
   errorOccurred: boolean;
   errorType?: string;
 
-  // Conflict Resolution
   conflictsDetected: number;
   conflictsResolved: number;
   conflictResolutionAccuracy?: number;
@@ -287,7 +276,7 @@ export class MetricsCollectionService {
   /**
    * Check if all required sections are present and substantive
    */
-  private assessSectionCompleteness(response: any, request: any): number {
+  private assessSectionCompleteness(response: any, _request: any): number {
     if (!response || typeof response !== 'object') {
       return 0;
     }
@@ -448,7 +437,7 @@ export class MetricsCollectionService {
   /**
    * Extract specifications from response text/structure
    */
-  private extractSpecsFromResponse(response: any): Record<string, any> {
+  private extractSpecsFromResponse(_response: any): Record<string, any> {
     const specs: Record<string, any> = {};
 
     return specs;

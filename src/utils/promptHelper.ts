@@ -5,7 +5,7 @@
  * query intent, database context, and response structure requirements.
  */
 
-import { getStructureDescription } from '../config/responseStructure.js';
+import { AI_CONFIG } from '../config/ai.config.js';
 import type {
   AnalysisRequest,
   DatabaseContext,
@@ -26,7 +26,7 @@ export class PromptHelper {
    * @param context Optional context from previous interactions
    * @returns Structured prompt for intent recognition
    */
-  static buildIntentRecognitionPrompt(query: string, context?: string): string {
+  static buildIntentRecognitionPrompt(query: string, _context?: string): string {
     return `You are an expert mechanical keyboard switch analyst tasked with analyzing user queries to determine their intent and extract relevant information.
 
 INTENT CATEGORIES:
@@ -73,7 +73,7 @@ Intent: follow_up_question
 Entities: switches=[], materials=[], properties=["gaming"]
 Reasoning: Contextual question requiring previous conversation
 
-USER QUERY: "${query}"
+USER QUERY: <user_query>${query}</user_query>
 
 REQUIRED OUTPUT FORMAT (JSON):
 {
@@ -176,13 +176,11 @@ ANALYSIS PRINCIPLES:
       return sections.join('\n');
     }
 
-    // Data quality summary
     const qualityPercent = Math.round(databaseContext.dataQuality.overallCompleteness * 100);
     sections.push(
       `Found specifications for ${databaseContext.totalFound}/${databaseContext.totalRequested} switches (${qualityPercent}% data completeness).`
     );
 
-    // Individual switch specifications
     sections.push('\nSWITCH SPECIFICATIONS FROM DATABASE:');
 
     for (const switchResult of databaseContext.switches) {
@@ -193,7 +191,6 @@ ANALYSIS PRINCIPLES:
       }
     }
 
-    // Data quality notes
     if (databaseContext.dataQuality.switchesNotFound.length > 0) {
       sections.push(
         `\nSwitches not found in database: ${databaseContext.dataQuality.switchesNotFound.join(', ')}`
@@ -206,7 +203,6 @@ ANALYSIS PRINCIPLES:
       );
     }
 
-    // Usage instructions
     sections.push('\nDATABASE USAGE INSTRUCTIONS:');
     sections.push('- Use database specifications as the primary source for factual information');
     sections.push(
@@ -241,7 +237,6 @@ ANALYSIS PRINCIPLES:
       sections.push(`  Type: ${switchData.type}`);
     }
 
-    // Housing and construction
     const construction: string[] = [];
     if (switchData.topHousing) construction.push(`Top: ${switchData.topHousing}`);
     if (switchData.bottomHousing) construction.push(`Bottom: ${switchData.bottomHousing}`);
@@ -250,7 +245,6 @@ ANALYSIS PRINCIPLES:
       sections.push(`  Construction: ${construction.join(', ')}`);
     }
 
-    // Specifications
     const specs: string[] = [];
     if (switchData.actuationForceG) specs.push(`Actuation: ${switchData.actuationForceG}g`);
     if (switchData.bottomOutForceG) specs.push(`Bottom-out: ${switchData.bottomOutForceG}g`);
@@ -260,7 +254,6 @@ ANALYSIS PRINCIPLES:
       sections.push(`  Specifications: ${specs.join(', ')}`);
     }
 
-    // Additional details
     if (switchData.mount) {
       sections.push(`  Mount: ${switchData.mount}`);
     }
@@ -304,7 +297,7 @@ ${intent.entities.materials ? `Materials of Interest: ${intent.entities.material
   static buildIntentSpecificStructure(intentCategory: string): string {
     const baseStructure = `REQUIRED JSON RESPONSE STRUCTURE:
 
-MANDATORY FIELD (FR4.4):
+MANDATORY FIELD:
 {
   "overview": "Comprehensive, informative summary that introduces the analysis and key insights (ALWAYS REQUIRED)"`;
 
@@ -440,10 +433,10 @@ FIELD POPULATION GUIDELINES:
    * @param intentCategory Intent category for specific instructions
    * @returns Final instructions section
    */
-  static buildFinalInstructionsWithOverview(intentCategory: string): string {
+  static buildFinalInstructionsWithOverview(_intentCategory: string): string {
     return `RESPONSE REQUIREMENTS (CRITICAL):
 
-1. MANDATORY OVERVIEW (FR4.4):
+1. MANDATORY OVERVIEW:
    - The "overview" field is REQUIRED for all responses
    - Must be comprehensive, informative, and substantive
    - Should introduce the analysis and provide key insights
@@ -455,7 +448,7 @@ FIELD POPULATION GUIDELINES:
    - Be transparent about data sources with "dataSource" field
    - Prefer factual accuracy over speculation
 
-3. PERSONA AND TONE (DC2):
+3. PERSONA AND TONE:
    - Maintain switch.ai's expert, analytical, slightly enthusiastic tone
    - Balance technical depth with accessibility
    - Provide insights beyond just specifications
@@ -472,6 +465,9 @@ FIELD POPULATION GUIDELINES:
    - Explain technical implications clearly
    - Consider various user contexts and use cases
    - Maintain consistency with switch.ai identity
+
+7. SECURITY INSTRUCTIONS:
+  ${AI_CONFIG.PROMPT_COMPONENTS.FINAL_SECURITY_INSTRUCTION}
 
 Generate your comprehensive analysis now, ensuring the overview field provides substantial value:`;
   }
@@ -627,7 +623,6 @@ MATERIAL KNOWLEDGE DOMAINS:
       `Material data available from ${databaseContext.totalFound} switches for reference examples:`
     );
 
-    // Extract unique materials from database switches
     const housingMaterials = new Set<string>();
     const stemMaterials = new Set<string>();
     const switchExamples: string[] = [];
@@ -639,7 +634,6 @@ MATERIAL KNOWLEDGE DOMAINS:
         if (data.bottomHousing) housingMaterials.add(data.bottomHousing);
         if (data.stem) stemMaterials.add(data.stem);
 
-        // Create switch examples for material reference
         const materials: string[] = [];
         if (data.topHousing) materials.push(`Top: ${data.topHousing}`);
         if (data.bottomHousing) materials.push(`Bottom: ${data.bottomHousing}`);
@@ -792,6 +786,11 @@ MATERIAL ANALYSIS STRUCTURE GUIDELINES:
    - Address common misconceptions about materials
    - Connect material choice to overall keyboard build considerations
 
+7. SECURITY INSTRUCTIONS:
+   - Ensure the analysis is conducted in a secure and ethical manner
+   - Protect user data and privacy
+   - Avoid sharing sensitive information without explicit consent
+
 Generate comprehensive material analysis that helps users understand both technical aspects and practical implications:`;
   }
 
@@ -805,7 +804,6 @@ Generate comprehensive material analysis that helps users understand both techni
   static buildComparisonPrompt(context: LLMPromptContext): string {
     const sections: string[] = [];
 
-    // Determine if this is a multi-switch comparison
     const switchCount = PromptHelper.getSwitchCount(context);
     const isMultiSwitch = switchCount > 2;
 
@@ -849,12 +847,10 @@ Generate comprehensive material analysis that helps users understand both techni
   static getSwitchCount(context: LLMPromptContext): number {
     const switchNames = new Set<string>();
 
-    // Count from intent entities
     if (context.intent.entities.switches) {
       context.intent.entities.switches.forEach((name) => switchNames.add(name));
     }
 
-    // Count from database context
     if (context.databaseContext) {
       context.databaseContext.switches.forEach((result) => {
         if (result.found && result.data?.switchName) {
@@ -1083,7 +1079,6 @@ COMPARISON METHODOLOGY:
       );
     }
 
-    // Comparison-specific data quality notes
     if (databaseContext.dataQuality.switchesNotFound.length > 0) {
       sections.push(
         `\nSwitches requiring general knowledge: ${databaseContext.dataQuality.switchesNotFound.join(', ')}`
@@ -1113,7 +1108,6 @@ COMPARISON METHODOLOGY:
     sections.push(`\n=== SWITCH ${switchNumber}: ${switchData.switchName} ===`);
     sections.push(`Database Match Confidence: ${Math.round(confidence * 100)}%`);
 
-    // Core specifications for comparison
     const coreSpecs: string[] = [];
     if (switchData.manufacturer) coreSpecs.push(`Manufacturer: ${switchData.manufacturer}`);
     if (switchData.type) coreSpecs.push(`Type: ${switchData.type}`);
@@ -1128,7 +1122,6 @@ COMPARISON METHODOLOGY:
       sections.push(`Core Specs: ${coreSpecs.join(', ')}`);
     }
 
-    // Material composition for comparison
     const materials: string[] = [];
     if (switchData.topHousing) materials.push(`Top Housing: ${switchData.topHousing}`);
     if (switchData.bottomHousing) materials.push(`Bottom Housing: ${switchData.bottomHousing}`);
@@ -1138,7 +1131,6 @@ COMPARISON METHODOLOGY:
       sections.push(`Materials: ${materials.join(', ')}`);
     }
 
-    // Additional comparison-relevant details
     const details: string[] = [];
     if (switchData.mount) details.push(`Mount: ${switchData.mount}`);
     if (switchData.spring) details.push(`Spring: ${switchData.spring}`);
@@ -1302,6 +1294,11 @@ NESTED STRUCTURE REQUIREMENTS:
    - Support conclusions with clear reasoning
    - Ensure recommendations align with identified differences
 
+6. SECURITY INSTRUCTIONS:
+   - Ensure the analysis is conducted in a secure and ethical manner
+   - Protect user data and privacy
+   - Avoid sharing sensitive information without explicit consent
+
 Generate a comprehensive comparison analysis that truly helps users make informed decisions:`;
   }
 
@@ -1386,7 +1383,6 @@ CONTEXTUAL ANALYSIS APPROACH:
         );
       }
 
-      // Include key elements from previous response
       if (followUpContext.previousResponse.technicalSpecifications) {
         sections.push('Previous analysis included technical specifications');
       }
@@ -1401,7 +1397,7 @@ CONTEXTUAL ANALYSIS APPROACH:
 
     if (followUpContext.conversationHistory && followUpContext.conversationHistory.length > 0) {
       sections.push('\nConversation History:');
-      const recentHistory = followUpContext.conversationHistory.slice(-2); // Last 2 exchanges
+      const recentHistory = followUpContext.conversationHistory.slice(-2);
       recentHistory.forEach((exchange, index) => {
         sections.push(
           `${index + 1}. Q: "${exchange.query}" A: ${exchange.response.substring(0, 100)}...`
@@ -1512,6 +1508,11 @@ FOLLOW-UP STRUCTURE GUIDELINES:
    - Support conclusions with reasoning that builds on previous discussion
    - Avoid contradicting previous analysis without explicit explanation
 
+6. SECURITY INSTRUCTIONS:
+   - Ensure the analysis is conducted in a secure and ethical manner
+   - Protect user data and privacy
+   - Avoid sharing sensitive information without explicit consent
+
 Generate a focused follow-up response that adds meaningful value to the ongoing conversation:`;
   }
 
@@ -1555,7 +1556,7 @@ Generate a focused follow-up response that adds meaningful value to the ongoing 
   }
 
   /**
-   * Get persona instructions from identity.txt (DC2)
+   * Get persona instructions from identity.txt
    * @returns Persona and style instructions for the LLM
    */
   static getPersonaInstructions(): string {
@@ -1592,7 +1593,7 @@ TONE AND STYLE:
   }
 
   /**
-   * Handle conflicts between database and LLM knowledge (FR2.4)
+   * Handle conflicts between database and LLM knowledge
    * @param databaseData The switch data from database
    * @returns Instructions for handling potential conflicts
    */
@@ -1647,7 +1648,6 @@ TONE AND STYLE:
   static validatePromptContext(context: LLMPromptContext): { isValid: boolean; errors: string[] } {
     const errors: string[] = [];
 
-    // Validate required fields
     if (!context.query || context.query.trim().length === 0) {
       errors.push('Query is required and cannot be empty');
     }
@@ -1655,7 +1655,6 @@ TONE AND STYLE:
     if (!context.intent) {
       errors.push('Intent recognition result is required');
     } else {
-      // Validate intent structure
       if (!context.intent.category || !context.intent.confidence) {
         errors.push('Intent must have category and confidence');
       }
@@ -1672,7 +1671,6 @@ TONE AND STYLE:
     if (!context.databaseContext) {
       errors.push('Database context is required');
     } else {
-      // Validate database context structure
       if (
         typeof context.databaseContext.totalFound !== 'number' ||
         typeof context.databaseContext.totalRequested !== 'number'
@@ -1685,7 +1683,6 @@ TONE AND STYLE:
       }
     }
 
-    // Validate user preferences if provided
     if (context.preferences) {
       const validDetailLevels = ['brief', 'moderate', 'detailed'];
       const validTechnicalDepths = ['basic', 'intermediate', 'advanced'];
@@ -1713,7 +1710,6 @@ TONE AND STYLE:
       }
     }
 
-    // Validate follow-up context if provided
     if (context.followUpContext?.conversationHistory) {
       if (!Array.isArray(context.followUpContext.conversationHistory)) {
         errors.push('Conversation history must be an array');
@@ -1722,7 +1718,6 @@ TONE AND STYLE:
       }
     }
 
-    // Query length validation
     if (context.query && context.query.length > 2000) {
       errors.push('Query too long (max 2000 characters)');
     }
@@ -1734,7 +1729,7 @@ TONE AND STYLE:
   }
 
   /**
-   * Get comprehensive structure guidance from responseStructure.ts (Task 4.5)
+   * Get comprehensive structure guidance from responseStructure.ts
    * Effectively communicates the JSON structure requirements to the LLM
    * @param intent The recognized query intent
    * @returns Complete structure guidance text for the prompt
@@ -1835,7 +1830,7 @@ Flexible Guidelines:
   }
 
   /**
-   * Enhanced prompt construction integrating structure guidance (Task 4.5)
+   * Enhanced prompt construction integrating structure guidance
    * Builds on the existing buildAnalysisPrompt with improved structure communication
    * @param context Full prompt context
    * @returns Enhanced prompt with clear structure guidance
@@ -1851,7 +1846,6 @@ Flexible Guidelines:
 
     sections.push(PromptHelper.buildQueryAnalysisSection(context.query, context.intent));
 
-    // Enhanced structure guidance (Task 4.5)
     sections.push(PromptHelper.getStructureGuidance(context.intent.category));
 
     sections.push(PromptHelper.buildIntentSpecificStructure(context.intent.category));

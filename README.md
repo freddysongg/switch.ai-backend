@@ -31,6 +31,9 @@ Your Mechanical Switch Assistant
 - [Database](#database)
 - [Contributing](#contributing)
 - [License](#license)
+- [Security Features](#security-features)
+  - [Rate Limiting](#rate-limiting)
+  - [API Timeouts](#api-timeouts)
 
 ## Features
 
@@ -406,3 +409,359 @@ Your PR will be reviewed, and any necessary feedback will be provided. Thank you
 ## License
 
 This project is licensed under the terms of the [LICENSE](./LICENSE) file.
+
+## Security Features
+
+SwitchAI backend implements a comprehensive, multi-layered security framework designed to protect against common web vulnerabilities, prompt injection attacks, and data breaches. All security measures follow industry best practices and are continuously tested through automated CI/CD pipelines.
+
+### 🛡️ Input Sanitization & Prompt Injection Protection
+
+**Advanced Input Sanitization Middleware (`src/middleware/inputSanitization.ts`)**
+
+The application employs sophisticated input sanitization that protects against 25+ types of prompt injection patterns, SQL injection, XSS, and command injection attacks.
+
+**Features:**
+- **Multi-Pattern Detection**: Blocks direct instruction patterns (`ignore previous instructions`), system override attempts (`system:`, `[admin]`), and injection templates (`{{code}}`, `<%exec%>`)
+- **Advanced Obfuscation Detection**: Identifies Base64, hex, Unicode, and other encoding attempts to bypass filters
+- **Special Character Validation**: Limits special character density (max 30%), consecutive special chars (max 5), and blocks control characters
+- **Security Risk Classification**: Categorizes threats as `low`, `medium`, `high`, or `critical` with confidence scoring
+- **Comprehensive Logging**: Records all security events with IP tracking, user identification, and violation details
+
+**Implementation:**
+```typescript
+// Applied globally to all API endpoints
+export const inputSanitization = (req: Request, res: Response, next: NextFunction): void => {
+  // Sanitizes all request body, query, and parameter inputs
+  // Blocks requests with detected violations
+  // Logs security events for monitoring
+}
+```
+
+**Blocked Attack Patterns Include:**
+- Prompt injection: `ignore all previous instructions`, `act as if you are`, `pretend to be`
+- System overrides: `system:`, `[admin]`, `<assistant>`, `<user>`
+- Code execution: `execute`, `eval`, `import`, `require`
+- SQL injection: `union select`, `drop table`, `insert into`
+- XSS attempts: `<script>`, `javascript:`, `on[event]=`
+- Command injection: `;`, `|`, `&&`, `$(command)`
+
+### 🏷️ User Input Wrapping & Context Protection
+
+**Secure Prompt Construction**
+
+All user-provided input is automatically wrapped in `<user_query>` tags before being sent to the LLM, providing clear boundaries between user input and system instructions.
+
+**Implementation Locations:**
+- `src/services/promptBuilder.ts` - Main prompt construction
+- `src/services/rerankService.ts` - Query processing 
+- `src/services/chat.ts` - Chat message handling
+- `src/config/ai.config.ts` - Fallback prompts
+- `src/utils/promptTemplates.ts` - Template rendering
+- `src/utils/promptHelper.ts` - Intent recognition
+
+**Database Content Sanitization (`src/utils/databaseSanitizer.ts`)**
+
+Sanitizes all content retrieved from the database before inclusion in LLM prompts:
+```typescript
+export function sanitizeDatabaseContent(content: string): string {
+  // Removes potential injection patterns from stored data
+  // Validates content integrity
+  // Logs suspicious database content
+}
+```
+
+### 📋 Comprehensive Input Validation
+
+**Zod Schema Validation (`src/schemas/validation.ts`)**
+
+Type-safe validation for all API endpoints using 20+ Zod schemas with strict validation rules:
+
+**Features:**
+- **Length Limits**: Maximum input lengths to prevent buffer overflow attacks
+- **Format Validation**: Email, UUID, URL, and custom format validation
+- **Prompt Injection Detection**: Schema-level pattern detection
+- **Type Safety**: Runtime type checking with TypeScript integration
+- **File Upload Validation**: Secure file type and size validation
+
+**Applied To:**
+- Chat endpoints (`src/routes/chat.ts`)
+- Analysis routes (`src/routes/analysisRoutes.ts`) 
+- User management (`src/routes/user.ts`)
+- All API request/response validation
+
+### 🔐 Secrets Management & Environment Security
+
+**Centralized Secrets Manager (`src/config/secrets.ts`)**
+
+Production-ready secrets management with runtime validation and security features:
+
+**Features:**
+- **Runtime Loading**: All secrets loaded and validated at application startup
+- **Type Safety**: TypeScript interfaces for all secret configurations
+- **Validation**: Strength checks for JWT secrets, format validation for API keys
+- **Redaction**: Automatic secret redaction in logs and debug output
+- **Error Handling**: Detailed startup errors for missing or invalid secrets
+
+**Managed Secrets:**
+```typescript
+interface ApplicationSecrets {
+  DATABASE_URL: string;           // PostgreSQL connection with validation
+  JWT_SECRET: string;            // Minimum 32 characters required  
+  GEMINI_API_KEY: string;        // API key format validation
+  NODE_ENV: string;              // Environment validation
+  PORT: string;                  // Port range validation (1-65535)
+}
+```
+
+**Implementation:**
+```typescript
+// Centralized access to all secrets
+import { getSecret, getSecrets } from '@/config/secrets';
+
+// Type-safe secret access
+const jwtSecret = getSecret('JWT_SECRET');
+const dbUrl = getSecret('DATABASE_URL');
+```
+
+### 🔍 Automated Security Auditing
+
+**Hardcoded Secret Detection (`backend-switchai/scripts/audit-secrets.js`)**
+
+Automated scanning for hardcoded secrets, API keys, and credentials:
+
+**Detection Patterns:**
+- API keys: AWS, Google, GitHub, generic API patterns
+- Database credentials: Connection strings, passwords
+- JWT secrets: Token patterns, signing keys
+- Encryption keys: Base64 encoded secrets
+- OAuth tokens: Access tokens, refresh tokens
+
+**CI Integration:**
+- Runs on every commit and pull request
+- Fails builds on CRITICAL or HIGH severity violations
+- Generates detailed security reports
+- 25+ secret pattern detection rules
+
+### 🔒 Content Security Policy (CSP)
+
+**Frontend Protection (`src/middleware/csp.ts`)**
+
+Strict Content Security Policy implementation to prevent XSS, clickjacking, and injection attacks:
+
+**CSP Directives:**
+```typescript
+"default-src 'self'",
+"script-src 'self' 'unsafe-inline'",
+"style-src 'self' 'unsafe-inline'", 
+"img-src 'self' data: https:",
+"connect-src 'self'",
+"frame-ancestors 'none'",
+"base-uri 'self'",
+"form-action 'self'"
+```
+
+**Additional Security Headers:**
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY` 
+- `X-XSS-Protection: 1; mode=block`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+
+### 🧹 PII Protection & Data Scrubbing
+
+**PII Scrubbing Utility (`src/utils/pii-scrubber.ts`)**
+
+Automatic detection and scrubbing of Personally Identifiable Information:
+
+**Protected Data Types:**
+- Email addresses (scrubbed to `[email protected]`)
+- Phone numbers (scrubbed to `[phone]`)
+- Social Security Numbers (scrubbed to `[ssn]`)
+- Credit card numbers (scrubbed to `[credit_card]`)
+- IP addresses (scrubbed to `[ip_address]`)
+- Physical addresses (scrubbed to `[address]`)
+
+**Implementation:**
+```typescript
+export function scrubPII(text: string): string {
+  // Regex-based detection and replacement
+  // Maintains text structure while removing sensitive data
+  // Logs PII detection events for audit trails
+}
+```
+
+### 🚦 Rate Limiting & API Protection
+
+**Comprehensive Rate Limiting**
+
+Multi-tier rate limiting system protecting against abuse and DDoS attacks:
+
+**Anonymous Users:**
+- 20 requests per hour
+- 2 concurrent requests maximum (burst protection)
+
+**Authenticated Users:**
+- 50 requests per hour  
+- 5 concurrent requests maximum (burst protection)
+- Database-backed tracking per user and endpoint
+
+**Features:**
+- IP-based rate limiting for anonymous users
+- User-based rate limiting for authenticated users
+- Burst protection to prevent rapid-fire requests
+- Automatic cleanup of expired rate limit records
+- Proper HTTP 429 responses with retry-after information
+
+**Implementation:**
+- Custom middleware in `src/middleware/rateLimiter.ts`
+- Applied to all `/api/*` endpoints
+- Uses in-memory storage for burst control and IP limits
+- Uses database storage for authenticated user limits
+
+### ⏱️ API Timeouts
+
+**Configurable Timeout Protection**
+
+Prevents hanging requests and ensures responsive service:
+
+**Gemini API Timeouts:**
+- Regular API calls: 30 seconds timeout
+- Health check calls: 10 seconds timeout
+- Configurable via `AI_CONFIG.API_TIMEOUT_MS` and `AI_CONFIG.HEALTH_CHECK_TIMEOUT_MS`
+
+**Features:**
+- Promise.race() based timeout implementation
+- Graceful error handling for timeout scenarios
+- Clear timeout error messages to users
+- AbortController integration for proper cleanup
+
+**Implementation:**
+- Timeout wrapper in `src/services/gemini.ts`
+- Health check timeout in `src/controllers/health.ts`
+- Configuration centralized in `src/config/ai.config.ts`
+
+### 🧪 Security Testing & CI/CD Integration
+
+**Comprehensive Security Test Suite (`src/tests/security.test.ts`)**
+
+100+ automated security tests covering all attack vectors:
+
+**Test Categories:**
+- **Prompt Injection**: 30+ test cases for instruction override attempts
+- **SQL Injection**: 20+ test cases for database attack patterns  
+- **XSS Protection**: 15+ test cases for script injection attempts
+- **Command Injection**: 10+ test cases for system command execution
+- **Input Validation**: 25+ test cases for malformed data handling
+- **Rate Limiting**: 10+ test cases for abuse protection
+
+**CI/CD Security Pipeline (`.github/workflows/security-tests.yml`)**
+
+Automated security scanning on every build:
+
+**Pipeline Features:**
+- **Dependency Scanning**: npm audit with vulnerability reporting
+- **Secret Auditing**: Hardcoded secret detection
+- **Security Test Execution**: Full test suite run
+- **Build Failure**: Automatic failure on high/critical vulnerabilities
+- **Security Reporting**: Detailed security scan results
+
+**Local Security Commands:**
+```bash
+# Run comprehensive security audit
+pnpm audit:security
+
+# Check for hardcoded secrets  
+pnpm audit:secrets
+
+# Run security test suite
+pnpm test:security
+
+# Fix low-risk vulnerabilities
+pnpm audit:fix
+```
+
+### 📊 Security Monitoring & Logging
+
+**Enhanced Security Logging**
+
+All security events are logged with detailed metadata for monitoring and incident response:
+
+**Logged Events:**
+- Input sanitization violations with risk classification
+- Rate limiting violations with IP and user tracking
+- PII detection events with scrubbing details
+- Authentication failures and suspicious activity
+- Secret access and validation events
+
+**Log Format:**
+```json
+{
+  "timestamp": "2024-01-01T12:00:00Z",
+  "level": "SECURITY_WARNING",
+  "event": "input_sanitization_violation", 
+  "ip": "192.168.1.1",
+  "userId": "user-uuid",
+  "risk": "high",
+  "violations": ["prompt_injection", "excessive_special_chars"],
+  "endpoint": "/api/chat",
+  "userAgent": "Mozilla/5.0..."
+}
+```
+
+### 🎯 Security Best Practices Implemented
+
+**Application Security:**
+- ✅ Input sanitization and validation on all endpoints
+- ✅ Prompt injection protection with 25+ pattern detection
+- ✅ SQL injection prevention through parameterized queries
+- ✅ XSS protection via CSP and input sanitization
+- ✅ Command injection blocking
+- ✅ PII detection and scrubbing
+- ✅ Rate limiting and DDoS protection
+- ✅ API timeout protection
+
+**Infrastructure Security:**
+- ✅ Centralized secrets management
+- ✅ Environment variable validation  
+- ✅ No hardcoded credentials
+- ✅ Secure database connections
+- ✅ Production-ready error handling
+- ✅ Security header implementation
+
+**Development Security:**
+- ✅ Automated dependency scanning
+- ✅ Security test automation
+- ✅ CI/CD security pipeline
+- ✅ Secret auditing automation
+- ✅ Vulnerability monitoring
+- ✅ Security event logging
+
+**Compliance & Monitoring:**
+- ✅ OWASP Top 10 coverage
+- ✅ Security incident logging
+- ✅ Audit trail maintenance  
+- ✅ Performance monitoring
+- ✅ Error tracking and alerting
+
+### 📚 Security Documentation
+
+For detailed security procedures and incident response, see:
+
+- `SECURITY_AUDIT.md` - Comprehensive security audit procedures
+- `tasks/tasks-prd-actionable-security-hardening-plan.md` - Security implementation roadmap
+- `src/tests/security.test.ts` - Security test specifications
+- `.github/workflows/security-tests.yml` - CI/CD security automation
+
+### 🚨 Security Incident Response
+
+**If you discover a security vulnerability:**
+
+1. **Do NOT** create a public GitHub issue
+2. Email security concerns to: [security email - to be configured]
+3. Include detailed description and reproduction steps
+4. Allow 48-72 hours for initial response
+5. Coordinate disclosure timeline with maintainers
+
+**For security questions or reporting:**
+- Review existing security tests and documentation
+- Check CI/CD pipeline for automated security scanning
+- Consult security audit documentation for procedures

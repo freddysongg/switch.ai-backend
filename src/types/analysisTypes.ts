@@ -1,25 +1,14 @@
 /**
  * Shared TypeScript types for the LLM-Powered Switch Analysis Feature
- *
- * This file contains types for internal data structures, requests, processing,
- * and workflow management across the analysis feature.
  */
 
-// Import response structure from the main definition
 import { AnalysisError, AnalysisResponse } from '../config/responseStructure.js';
 
-// ============================================================================
-// QUERY PROCESSING TYPES (FR1)
-// ============================================================================
-
-// Enhanced request interface for comprehensive query processing (FR1.1)
 export interface AnalysisRequest {
-  // Core query fields
   query: string;
   conversationId?: string;
   userId?: string;
 
-  // Follow-up context for maintaining conversation flow (FR3.4)
   followUpContext?: {
     previousQuery?: string;
     previousResponse?: Partial<AnalysisResponse>;
@@ -30,7 +19,6 @@ export interface AnalysisRequest {
     }>;
   };
 
-  // User preferences and options
   preferences?: {
     detailLevel?: 'brief' | 'moderate' | 'detailed';
     technicalDepth?: 'basic' | 'intermediate' | 'advanced';
@@ -40,12 +28,10 @@ export interface AnalysisRequest {
     focusAreas?: string[];
   };
 
-  // Request metadata and tracking
   requestId: string;
   timestamp: Date;
   source?: 'web' | 'api' | 'mobile';
 
-  // Optional query hints and constraints
   queryHints?: {
     expectedIntent?: QueryIntent;
     switchNames?: string[];
@@ -53,11 +39,9 @@ export interface AnalysisRequest {
     comparisonType?: 'detailed' | 'quick';
   };
 
-  // Additional metadata
   metadata?: Record<string, any>;
 }
 
-// Request body interface for API endpoints (what comes from HTTP requests)
 export interface AnalysisRequestBody {
   query: string;
   conversationId?: string;
@@ -68,7 +52,6 @@ export interface AnalysisRequestBody {
   metadata?: Record<string, any>;
 }
 
-// Intent recognition types (FR1.2)
 export type QueryIntent =
   | 'general_switch_info'
   | 'switch_comparison'
@@ -78,7 +61,7 @@ export type QueryIntent =
 
 export interface IntentRecognitionResult {
   intent: QueryIntent;
-  category: QueryIntent; // Alias for intent to support both naming conventions
+  category: QueryIntent;
   confidence: number;
   extractedEntities: {
     switches: string[];
@@ -102,11 +85,6 @@ export interface IntentRecognitionResult {
   }>;
 }
 
-// ============================================================================
-// DATABASE INTERACTION TYPES (FR2)
-// ============================================================================
-
-// Switch data from database (matches identity.txt structure)
 export interface DatabaseSwitchData {
   switchName: string;
   manufacturer?: string;
@@ -153,10 +131,6 @@ export interface EnhancedDatabaseContext extends DatabaseContext {
   };
 }
 
-// ============================================================================
-// LLM INTERACTION TYPES (FR3, TC4)
-// ============================================================================
-
 export interface LLMPromptContext {
   query: string;
   intent: IntentRecognitionResult;
@@ -187,10 +161,6 @@ export interface LLMResponse {
   };
   model?: string;
 }
-
-// ============================================================================
-// PROCESSING WORKFLOW TYPES
-// ============================================================================
 
 export interface ProcessingStep {
   stepName: string;
@@ -235,10 +205,6 @@ export interface Workflow {
   totalDurationMs?: number;
 }
 
-// ============================================================================
-// CONFIGURATION TYPES
-// ============================================================================
-
 export interface AnalysisConfig {
   llm: {
     model: string;
@@ -257,10 +223,6 @@ export interface AnalysisConfig {
     logResponses: boolean;
   };
 }
-
-// ============================================================================
-// LOGGING TYPES (FR5)
-// ============================================================================
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -282,27 +244,13 @@ export interface StepLog {
   timestamp: Date;
 }
 
-// ============================================================================
-// ERROR HANDLING TYPES (FR6)
-// ============================================================================
-
-// Note: AnalysisError is imported from responseStructure.ts
-
-// ============================================================================
-// VALIDATION TYPES
-// ============================================================================
-
 export interface ValidationResult {
   isValid: boolean;
   errors: string[];
   warnings: string[];
   hasRequiredFields: boolean;
-  structureCompliance: number; // 0-1 score
+  structureCompliance: number;
 }
-
-// ============================================================================
-// UTILITIES
-// ============================================================================
 
 export interface NormalizationResult {
   original: string;
@@ -311,5 +259,4 @@ export interface NormalizationResult {
   suggestions: string[];
 }
 
-// Re-export AnalysisResponse from the main definition
 export { AnalysisResponse, AnalysisError };

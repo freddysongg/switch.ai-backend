@@ -21,8 +21,7 @@ import type {
   LLMRequest,
   LLMResponse,
   QueryIntent,
-  Workflow,
-  WorkflowStep
+  Workflow
 } from '../types/analysisTypes.js';
 import { getPromptType, validateIntent } from '../utils/intentMapping.js';
 import { LoggingHelper } from '../utils/loggingHelper.js';
@@ -51,10 +50,6 @@ function logWorkflowStart(workflowId: string, query: string): void {
   console.log(`[WORKFLOW_START] ${workflowId}: ${query}`);
 }
 
-function logWorkflowComplete(workflowId: string): void {
-  console.log(`[WORKFLOW_COMPLETE] ${workflowId}`);
-}
-
 function logError(workflowId: string, step: string, error: any): void {
   console.error(`[ERROR] ${workflowId} ${step}:`, error);
 }
@@ -80,8 +75,7 @@ export class LLMAnalysisService {
   async processAnalysisRequest(request: AnalysisRequest): Promise<AnalysisResponse> {
     const workflowId = this.createWorkflow(request);
     const startTime = Date.now();
-    
-    // Declare variables at method scope so they're accessible in catch block
+
     let intentResult: IntentRecognitionResult | undefined;
     let databaseContext: EnhancedDatabaseContext | undefined;
 
@@ -155,13 +149,8 @@ export class LLMAnalysisService {
         error: error.message
       });
 
-      // Use comprehensive error handling system
-      const analysisError = this.handleAnalysisError(error, 'analysis_processing');
-      
-      // Try to gather any available data from partial processing
       const availableData: any = {};
-      
-      // Check if we got any partial data before the error (these variables may be undefined if error occurred early)
+
       try {
         if (typeof intentResult !== 'undefined') {
           availableData.intentResult = intentResult;
@@ -170,9 +159,9 @@ export class LLMAnalysisService {
           availableData.databaseContext = databaseContext;
         }
       } catch (scopeError) {
-        // Variables not in scope, no partial data available
+        console.error('Failed to set available data:', scopeError);
       }
-      
+
       const errorContext = {
         requestId: request.requestId,
         workflowId,
@@ -193,7 +182,6 @@ export class LLMAnalysisService {
         }
       });
 
-      // Use graceful degradation system for better user experience
       return this.handleAnalysisFailureWithDegradation(request, error, availableData);
     }
   }
@@ -529,10 +517,8 @@ export class LLMAnalysisService {
     } catch (error: any) {
       console.error('Intent recognition error:', error.message || error);
 
-      // Use structured error handling for better user experience
       if (error.message.includes('timeout') || error.name === 'TimeoutError') {
         const timeoutError = this.handleAnalysisError(error, 'intent_recognition');
-        // Still provide rule-based fallback but with error context
         const fallbackResult = this.performRuleBasedIntentRecognition(query, error, requestId);
         fallbackResult.reasoning += ` (Fallback due to timeout: ${timeoutError.message})`;
         return fallbackResult;
@@ -540,22 +526,23 @@ export class LLMAnalysisService {
 
       if (error.message.includes('rate limit') || error.name === 'RateLimitError') {
         const rateLimitError = this.handleAnalysisError(error, 'intent_recognition');
-        throw rateLimitError; // Don't fallback for rate limits, let controller handle
+        throw rateLimitError;
       }
 
       if (error.message.includes('authentication') || error.message.includes('unauthorized')) {
         const authError = this.handleAnalysisError(error, 'intent_recognition');
-        throw authError; // Don't fallback for auth issues
+        throw authError;
       }
 
-      // For other errors, use rule-based fallback with error annotation
       const analysisError = this.handleAnalysisError(error, 'intent_recognition');
-      console.warn(`Intent recognition failed (${analysisError.code}), using rule-based fallback:`, analysisError.message);
-      
+      console.warn(
+        `Intent recognition failed (${analysisError.code}), using rule-based fallback:`,
+        analysisError.message
+      );
+
       const fallbackResult = this.performRuleBasedIntentRecognition(query, error, requestId);
       fallbackResult.reasoning += ` (Fallback used due to: ${analysisError.message})`;
-      
-      // Log the fallback usage
+
       if (requestId) {
         LoggingHelper.logWarning(
           requestId,
@@ -574,8 +561,7 @@ export class LLMAnalysisService {
   }
 
   /**
-   * ENHANCEMENT: Rule-based intent recognition fallback for API failures
-   * Enables meaningful analysis even during API outages
+   * Rule-based intent recognition fallback for API failures
    */
   private performRuleBasedIntentRecognition(
     query: string,
@@ -675,16 +661,11 @@ export class LLMAnalysisService {
     };
 
     if (requestId) {
-      LoggingHelper.logIntentRecognition(
-        requestId,
-        intentResult.intent,
-        intentResult.confidence,
-        {
-          ...intentResult.extractedEntities,
-          fallbackUsed: true,
-          originalError: originalError?.message || 'Parse failure'
-        }
-      );
+      LoggingHelper.logIntentRecognition(requestId, intentResult.intent, intentResult.confidence, {
+        ...intentResult.extractedEntities,
+        fallbackUsed: true,
+        originalError: originalError?.message || 'Parse failure'
+      });
     }
 
     console.log(`Rule-based intent recognition (API fallback):`, {
@@ -706,7 +687,10 @@ export class LLMAnalysisService {
    * @param promptContext Complete context for LLM prompt construction
    * @returns Structured analysis response
    */
-  async generateAnalysisResponse(promptContext: LLMPromptContext, requestId?: string): Promise<AnalysisResponse> {
+  async generateAnalysisResponse(
+    promptContext: LLMPromptContext,
+    requestId?: string
+  ): Promise<AnalysisResponse> {
     try {
       const prompt = this.buildMarkdownEnforcingPrompt(promptContext);
 
@@ -1087,7 +1071,7 @@ export class LLMAnalysisService {
     return analysis;
   }
 
-  private generateMaterialOverview(query: string): string {
+  private generateMaterialOverview(_query: string): string {
     return (
       `## Overview\n\nI can provide basic material information, but the full material analysis system is currently unavailable. ` +
       `This response covers general material properties for keyboard switches.`
@@ -1112,7 +1096,7 @@ export class LLMAnalysisService {
   private generateGeneralOverview(
     switches: string[],
     knowledgeBase: Record<string, any>,
-    query: string
+    _query: string
   ): string {
     if (switches.length === 0) {
       return (
@@ -1121,7 +1105,6 @@ export class LLMAnalysisService {
       );
     }
 
-    const knownSwitches = switches.filter((s) => knowledgeBase[s.toLowerCase()]);
     const switchName = switches[0];
     const info = knowledgeBase[switchName.toLowerCase()];
 
@@ -1499,7 +1482,10 @@ export class LLMAnalysisService {
    * @param response Analysis response to validate
    * @param context Original prompt context
    */
-  private validateComparisonStructure(response: AnalysisResponse, context: LLMPromptContext): void {
+  private validateComparisonStructure(
+    response: AnalysisResponse,
+    _context: LLMPromptContext
+  ): void {
     const content = response.analysis || '';
 
     if (!content || content.length < 100) {
@@ -1602,7 +1588,7 @@ export class LLMAnalysisService {
    */
   private createStructuredFallbackResponse(
     promptContext: LLMPromptContext,
-    error: any
+    _error: any
   ): AnalysisResponse {
     const baseResponse: AnalysisResponse = {
       overview:
@@ -1658,8 +1644,8 @@ export class LLMAnalysisService {
         };
       }
 
-      let contextIntent: QueryIntent = 'general_switch_info';
-      let contextQuery: string = '';
+      const contextIntent: QueryIntent = 'general_switch_info';
+      const contextQuery: string = '';
 
       const rawResponse = await this.geminiService.generate(prompt, generationConfig, {
         intent: contextIntent,
@@ -1801,16 +1787,6 @@ export class LLMAnalysisService {
   }
 
   /**
-   * Validate LLM response structure and content
-   * TODO: Implement response validation
-   * @param response The LLM response to validate
-   * @returns Validation result with errors/warnings
-   */
-  private validateResponse(response: any): { isValid: boolean; errors: string[] } {
-    throw new Error('LLMAnalysisService.validateResponse not yet implemented');
-  }
-
-  /**
    * Handle analysis errors and create structured error responses
    * Provides comprehensive error classification and user-friendly messaging (FR6.1)
    * @param error The error that occurred
@@ -1820,54 +1796,62 @@ export class LLMAnalysisService {
   private handleAnalysisError(error: any, step: string): AnalysisError {
     const timestamp = new Date();
     let errorCode: AnalysisError['code'];
-    let errorMessage: string;
     let userMessage: string;
     let recoverable = false;
     let retryDelay: number | undefined;
-    let details: any = {};
+    const details: any = {};
 
-    // Classify error based on type and content
     if (error.name === 'ValidationError' || error.message.includes('validation')) {
       errorCode = 'RESPONSE_VALIDATION_FAILED';
-      errorMessage = `Response validation failed in ${step}: ${error.message}`;
       userMessage = 'The analysis completed but had formatting issues. Please try again.';
       recoverable = true;
       retryDelay = 1000;
     } else if (error.message.includes('timeout') || error.name === 'TimeoutError') {
       errorCode = 'TIMEOUT';
-      errorMessage = `Request timeout in ${step}: ${error.message}`;
-      userMessage = 'The analysis request took too long to complete. Please try a simpler query or try again later.';
+      userMessage =
+        'The analysis request took too long to complete. Please try a simpler query or try again later.';
       recoverable = true;
       retryDelay = 5000;
     } else if (error.message.includes('rate limit') || error.name === 'RateLimitError') {
       errorCode = 'RATE_LIMITED';
-      errorMessage = `Rate limit exceeded in ${step}: ${error.message}`;
       userMessage = 'Too many requests have been made. Please wait a moment before trying again.';
       recoverable = true;
-      retryDelay = 60000; // 1 minute
-    } else if (error.message.includes('database') || error.message.includes('DB') || step.includes('database')) {
+      retryDelay = 60000;
+    } else if (
+      error.message.includes('database') ||
+      error.message.includes('DB') ||
+      step.includes('database')
+    ) {
       errorCode = 'DATABASE_ERROR';
-      errorMessage = `Database error in ${step}: ${error.message}`;
-      userMessage = 'The database service is temporarily unavailable. Analysis will continue with general knowledge only.';
+      userMessage =
+        'The database service is temporarily unavailable. Analysis will continue with general knowledge only.';
       recoverable = true;
       retryDelay = 2000;
       details.fallbackAvailable = true;
-    } else if (error.message.includes('LLM') || error.message.includes('API') || error.message.includes('generate')) {
+    } else if (
+      error.message.includes('LLM') ||
+      error.message.includes('API') ||
+      error.message.includes('generate')
+    ) {
       errorCode = 'LLM_REQUEST_FAILED';
-      errorMessage = `LLM service error in ${step}: ${error.message}`;
-      userMessage = 'The AI analysis service is temporarily unavailable. Please try again in a few moments.';
+      userMessage =
+        'The AI analysis service is temporarily unavailable. Please try again in a few moments.';
       recoverable = true;
       retryDelay = 3000;
-    } else if (error.message.includes('parse') || error.message.includes('JSON') || error.message.includes('format')) {
+    } else if (
+      error.message.includes('parse') ||
+      error.message.includes('JSON') ||
+      error.message.includes('format')
+    ) {
       errorCode = 'LLM_RESPONSE_INVALID';
-      errorMessage = `Response parsing error in ${step}: ${error.message}`;
-      userMessage = 'There was an issue processing the analysis response. Please try rephrasing your query.';
+      userMessage =
+        'There was an issue processing the analysis response. Please try rephrasing your query.';
       recoverable = true;
       retryDelay = 1000;
     } else if (error.message.includes('intent') || step.includes('intent')) {
       errorCode = 'INTENT_RECOGNITION_FAILED';
-      errorMessage = `Intent recognition error in ${step}: ${error.message}`;
-      userMessage = 'I had trouble understanding your question. Please try rephrasing it more clearly or provide specific switch names.';
+      userMessage =
+        'I had trouble understanding your question. Please try rephrasing it more clearly or provide specific switch names.';
       recoverable = true;
       retryDelay = 500;
       details.suggestions = [
@@ -1877,44 +1861,42 @@ export class LLMAnalysisService {
       ];
     } else if (error.message.includes('network') || error.message.includes('connection')) {
       errorCode = 'NETWORK_ERROR';
-      errorMessage = `Network error in ${step}: ${error.message}`;
-      userMessage = 'There seems to be a connectivity issue. Please check your connection and try again.';
+      userMessage =
+        'There seems to be a connectivity issue. Please check your connection and try again.';
       recoverable = true;
       retryDelay = 2000;
     } else if (error.message.includes('authentication') || error.message.includes('unauthorized')) {
       errorCode = 'AUTHENTICATION_ERROR';
-      errorMessage = `Authentication error in ${step}: ${error.message}`;
-      userMessage = 'Authentication failed. Please sign in again to continue using the analysis service.';
+      userMessage =
+        'Authentication failed. Please sign in again to continue using the analysis service.';
       recoverable = false;
     } else if (error.message.includes('quota') || error.message.includes('limit exceeded')) {
       errorCode = 'QUOTA_EXCEEDED';
-      errorMessage = `Service quota exceeded in ${step}: ${error.message}`;
-      userMessage = 'The service usage limit has been reached. Please try again later or contact support.';
+      userMessage =
+        'The service usage limit has been reached. Please try again later or contact support.';
       recoverable = true;
-      retryDelay = 3600000; // 1 hour
+      retryDelay = 3600000;
     } else {
-      // Generic/unknown error
       errorCode = 'INTERNAL_ERROR';
-      errorMessage = `Unexpected error in ${step}: ${error.message || 'Unknown error'}`;
-      userMessage = 'An unexpected error occurred during analysis. Please try again or contact support if the problem persists.';
+      userMessage =
+        'An unexpected error occurred during analysis. Please try again or contact support if the problem persists.';
       recoverable = true;
       retryDelay = 2000;
     }
 
-    // Add technical details for debugging (without exposing sensitive info)
     details.step = step;
     details.timestamp = timestamp.toISOString();
     details.errorType = error.name || 'Unknown';
-    
+
     if (error.stack && process.env.NODE_ENV === 'development') {
-      details.stackTrace = error.stack.split('\n').slice(0, 5).join('\n'); // Limit stack trace
+      details.stackTrace = error.stack.split('\n').slice(0, 5).join('\n');
     }
 
-    // Add context-specific guidance
     if (step === 'intent_recognition') {
       details.guidance = 'Try using more specific switch names or clearer question phrasing';
     } else if (step === 'database_lookup') {
-      details.guidance = 'The system will fall back to general knowledge if database data is unavailable';
+      details.guidance =
+        'The system will fall back to general knowledge if database data is unavailable';
     } else if (step === 'analysis_generation') {
       details.guidance = 'Consider simplifying your query or asking about fewer switches at once';
     }
@@ -1929,7 +1911,6 @@ export class LLMAnalysisService {
       retryDelay
     };
 
-    // Log the error with full context
     LoggingHelper.logError('unknown', analysisError, step, {
       originalError: error.message,
       userMessage,
@@ -2318,7 +2299,7 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
    */
   private validateMaterialAnalysisStructure(
     response: AnalysisResponse,
-    context: LLMPromptContext
+    _context: LLMPromptContext
   ): void {
     if (!response.materialAnalysis) {
       throw new Error('Material analysis response missing materialAnalysis field');
@@ -2390,7 +2371,7 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
    */
   private validateGeneralInfoStructure(
     response: AnalysisResponse,
-    context: LLMPromptContext
+    _context: LLMPromptContext
   ): void {
     // For general info, just ensure we have meaningful content
     if (!response.technicalSpecifications && !response.soundProfile && !response.typingFeel) {
@@ -2412,14 +2393,19 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
    * @param analysisError Structured error information
    * @returns Enhanced fallback analysis response
    */
-  private createEnhancedFallbackResponse(request: AnalysisRequest, analysisError: AnalysisError): AnalysisResponse {
+  private createEnhancedFallbackResponse(
+    request: AnalysisRequest,
+    analysisError: AnalysisError
+  ): AnalysisResponse {
     let overview = analysisError.message;
-    
+
     // Add helpful context based on error type
     if (analysisError.code === 'DATABASE_ERROR') {
-      overview += " I can still provide general information about switches using my knowledge base.";
+      overview +=
+        ' I can still provide general information about switches using my knowledge base.';
     } else if (analysisError.code === 'INTENT_RECOGNITION_FAILED') {
-      overview += " To get better results, try asking about specific switch names or characteristics.";
+      overview +=
+        ' To get better results, try asking about specific switch names or characteristics.';
     } else if (analysisError.code === 'RATE_LIMITED') {
       overview += ` Please wait ${Math.round((analysisError.retryDelay || 60000) / 1000)} seconds before trying again.`;
     }
@@ -2469,8 +2455,8 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
       partialAnalysis?: string;
     }
   ): AnalysisResponse {
-    const criticalErrors = errors.filter(e => !e.recoverable);
-    const serviceErrors = errors.filter(e => 
+    const criticalErrors = errors.filter((e) => !e.recoverable);
+    const serviceErrors = errors.filter((e) =>
       ['LLM_REQUEST_FAILED', 'DATABASE_ERROR', 'NETWORK_ERROR'].includes(e.code)
     );
 
@@ -2501,14 +2487,16 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
     errors: AnalysisError[],
     availableData?: any
   ): AnalysisResponse {
-    const warnings = errors.map(e => e.message).join(' ');
-    
+    const warnings = errors.map((e) => e.message).join(' ');
+
     return {
       overview: `I've completed your analysis for "${request.query}" with some minor limitations. ${warnings}`,
-      analysis: availableData?.partialAnalysis || "Analysis completed with minor service limitations.",
-      dataSource: availableData?.databaseContext?.totalFound > 0 ? 'Mixed (Database + LLM)' : 'LLM Knowledge',
+      analysis:
+        availableData?.partialAnalysis || 'Analysis completed with minor service limitations.',
+      dataSource:
+        availableData?.databaseContext?.totalFound > 0 ? 'Mixed (Database + LLM)' : 'LLM Knowledge',
       analysisConfidence: 'High (with warnings)',
-      additionalNotes: `Analysis completed at ${new Date().toISOString()} with minor warnings: ${errors.map(e => e.code).join(', ')}`,
+      additionalNotes: `Analysis completed at ${new Date().toISOString()} with minor warnings: ${errors.map((e) => e.code).join(', ')}`,
       recommendations: [
         'Analysis provided with best available data',
         'Some features may have limited information due to service limitations',
@@ -2527,14 +2515,18 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
   ): AnalysisResponse {
     const switchNames = this.extractSwitchNamesFromQuery(request.query);
     let overview = `I can provide a simplified analysis for your query about ${switchNames.length > 0 ? switchNames.join(' and ') : 'keyboard switches'}.`;
-    
+
     // Add service status context
-    const unavailableServices = errors.map(e => {
+    const unavailableServices = errors.map((e) => {
       switch (e.code) {
-        case 'DATABASE_ERROR': return 'database specifications';
-        case 'LLM_REQUEST_FAILED': return 'detailed AI analysis';
-        case 'NETWORK_ERROR': return 'external services';
-        default: return 'some features';
+        case 'DATABASE_ERROR':
+          return 'database specifications';
+        case 'LLM_REQUEST_FAILED':
+          return 'detailed AI analysis';
+        case 'NETWORK_ERROR':
+          return 'external services';
+        default:
+          return 'some features';
       }
     });
 
@@ -2542,14 +2534,14 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
       overview += ` Note: ${unavailableServices.join(', ')} ${unavailableServices.length === 1 ? 'is' : 'are'} temporarily unavailable.`;
     }
 
-    let analysis = this.generateSimplifiedSwitchAnalysis(switchNames, availableData);
+    const analysis = this.generateSimplifiedSwitchAnalysis(switchNames, availableData);
 
     return {
       overview,
       analysis,
       dataSource: 'Limited (Partial Services)',
       analysisConfidence: 'Moderate (Simplified)',
-      additionalNotes: `Simplified analysis provided due to service limitations: ${errors.map(e => e.code).join(', ')}. Generated at ${new Date().toISOString()}`,
+      additionalNotes: `Simplified analysis provided due to service limitations: ${errors.map((e) => e.code).join(', ')}. Generated at ${new Date().toISOString()}`,
       recommendations: [
         'This is a simplified analysis due to current service limitations',
         'For comprehensive details, please try again when all services are available',
@@ -2564,7 +2556,7 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
   private createBasicInformationalResponse(
     request: AnalysisRequest,
     errors: AnalysisError[],
-    availableData?: any
+    _availableData?: any
   ): AnalysisResponse {
     const switchNames = this.extractSwitchNamesFromQuery(request.query);
     const basicInfo = this.getBasicSwitchInformation(switchNames);
@@ -2574,7 +2566,7 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
       analysis: basicInfo,
       dataSource: 'Basic Knowledge Base',
       analysisConfidence: 'Limited (Basic Info Only)',
-      additionalNotes: `Basic information provided due to major service limitations. Services affected: ${errors.map(e => e.code).join(', ')}. Generated at ${new Date().toISOString()}`,
+      additionalNotes: `Basic information provided due to major service limitations. Services affected: ${errors.map((e) => e.code).join(', ')}. Generated at ${new Date().toISOString()}`,
       recommendations: [
         'Only basic switch information is available right now',
         'Please check back later for detailed analysis capabilities',
@@ -2593,11 +2585,12 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
     const serviceStatus = this.getServiceStatusSummary(errors);
 
     return {
-      overview: "I'm currently unable to provide detailed switch analysis due to service limitations. Here's what you can do instead.",
+      overview:
+        "I'm currently unable to provide detailed switch analysis due to service limitations. Here's what you can do instead.",
       analysis: `**Service Status**: ${serviceStatus}\n\n**Alternative Resources**:\n- Visit manufacturer websites for official specifications\n- Check community forums like r/MechanicalKeyboards\n- Consult switch databases like switches.mx\n- Try again later when services are restored`,
       dataSource: 'System Status Information',
       analysisConfidence: 'N/A (Service Unavailable)',
-      additionalNotes: `Minimal response due to complete service failure. Errors: ${errors.map(e => e.code).join(', ')}. Generated at ${new Date().toISOString()}`,
+      additionalNotes: `Minimal response due to complete service failure. Errors: ${errors.map((e) => e.code).join(', ')}. Generated at ${new Date().toISOString()}`,
       recommendations: [
         'All analysis services are currently unavailable',
         'Please try again in a few minutes',
@@ -2608,9 +2601,9 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
         code: 'INTERNAL_ERROR',
         message: 'Complete service failure - providing minimal guidance only',
         recoverable: true,
-        details: { 
+        details: {
           totalErrors: errors.length,
-          affectedServices: Array.from(new Set(errors.map(e => e.step))),
+          affectedServices: Array.from(new Set(errors.map((e) => e.step))),
           serviceStatus: serviceStatus
         },
         step: 'complete_system_failure',
@@ -2636,10 +2629,10 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
     ];
 
     const found: string[] = [];
-    switchPatterns.forEach(pattern => {
+    switchPatterns.forEach((pattern) => {
       const matches = query.match(pattern);
       if (matches) {
-        found.push(...matches.map(m => m.trim()));
+        found.push(...matches.map((m) => m.trim()));
       }
     });
 
@@ -2656,14 +2649,14 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
   /**
    * Generate simplified switch analysis when full services unavailable
    */
-  private generateSimplifiedSwitchAnalysis(switchNames: string[], availableData?: any): string {
+  private generateSimplifiedSwitchAnalysis(switchNames: string[], _availableData?: any): string {
     if (switchNames.length === 0) {
       return `**General Switch Information**:\n\nKeyboard switches come in three main types:\n- **Linear**: Smooth keystroke, no tactile bump (good for gaming)\n- **Tactile**: Bump during actuation (good for typing)\n- **Clicky**: Tactile bump with audible click (good for typing)\n\nKey factors to consider:\n- Actuation force (light: 45g, medium: 50-60g, heavy: 65g+)\n- Travel distance (usually 4mm total)\n- Sound profile and office compatibility\n- Personal preference for feel and responsiveness`;
     }
 
     let analysis = `## Basic Information for ${switchNames.join(', ')}\n\n`;
-    
-    switchNames.forEach(switchName => {
+
+    switchNames.forEach((switchName) => {
       const info = this.getBasicSwitchInfo(switchName);
       analysis += `**${switchName}**:\n`;
       analysis += `- Type: ${info.type}\n`;
@@ -2680,9 +2673,14 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
   /**
    * Get basic switch information for simplified responses
    */
-  private getBasicSwitchInfo(switchName: string): { type: string; force: string; sound: string; useCase: string } {
+  private getBasicSwitchInfo(switchName: string): {
+    type: string;
+    force: string;
+    sound: string;
+    useCase: string;
+  } {
     const name = switchName.toLowerCase();
-    
+
     // Cherry MX switches
     if (name.includes('cherry mx red') || name.includes('mx red')) {
       return { type: 'Linear', force: '45g', sound: 'Quiet', useCase: 'Gaming' };
@@ -2693,7 +2691,7 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
     if (name.includes('cherry mx brown') || name.includes('mx brown')) {
       return { type: 'Tactile', force: '45g', sound: 'Quiet tactile', useCase: 'Mixed use' };
     }
-    
+
     // Gateron switches
     if (name.includes('gateron red')) {
       return { type: 'Linear', force: '45g', sound: 'Smooth', useCase: 'Gaming' };
@@ -2707,12 +2705,12 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
     if (name.includes('gateron brown')) {
       return { type: 'Tactile', force: '45g', sound: 'Soft tactile', useCase: 'Mixed use' };
     }
-    
+
     // Specialty switches
     if (name.includes('holy panda')) {
       return { type: 'Tactile', force: '67g', sound: 'Thocky', useCase: 'Enthusiast typing' };
     }
-    
+
     // Generic fallback
     return { type: 'Unknown', force: 'Variable', sound: 'Depends on type', useCase: 'General' };
   }
@@ -2722,7 +2720,7 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
    */
   private getBasicSwitchInformation(switchNames: string[]): string {
     if (switchNames.length === 0) {
-      return "**Basic Switch Categories**:\n\n- **Linear Switches**: Smooth keystroke without bumps, preferred for gaming\n- **Tactile Switches**: Noticeable bump during actuation, good for typing accuracy\n- **Clicky Switches**: Tactile bump plus audible click, traditional typing feel\n\n**Common Characteristics**:\n- Most switches have 4mm total travel distance\n- Actuation forces typically range from 45g to 70g\n- Material and design affect sound and feel significantly";
+      return '**Basic Switch Categories**:\n\n- **Linear Switches**: Smooth keystroke without bumps, preferred for gaming\n- **Tactile Switches**: Noticeable bump during actuation, good for typing accuracy\n- **Clicky Switches**: Tactile bump plus audible click, traditional typing feel\n\n**Common Characteristics**:\n- Most switches have 4mm total travel distance\n- Actuation forces typically range from 45g to 70g\n- Material and design affect sound and feel significantly';
     }
 
     return this.generateSimplifiedSwitchAnalysis(switchNames);
@@ -2732,13 +2730,16 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
    * Generate service status summary for user information
    */
   private getServiceStatusSummary(errors: AnalysisError[]): string {
-    const errorCounts = errors.reduce((acc, err) => {
-      acc[err.code] = (acc[err.code] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
+    const errorCounts = errors.reduce(
+      (acc, err) => {
+        acc[err.code] = (acc[err.code] || 0) + 1;
+        return acc;
+      },
+      {} as Record<string, number>
+    );
 
     const statusItems: string[] = [];
-    
+
     if (errorCounts['LLM_REQUEST_FAILED']) {
       statusItems.push('AI Analysis Service: Unavailable');
     }
@@ -2752,7 +2753,9 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
       statusItems.push('Response Times: Degraded');
     }
 
-    return statusItems.length > 0 ? statusItems.join(', ') : 'Multiple services experiencing issues';
+    return statusItems.length > 0
+      ? statusItems.join(', ')
+      : 'Multiple services experiencing issues';
   }
 
   /**
@@ -2772,10 +2775,12 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
       errors.push(...availableData.additionalErrors);
     }
 
-    console.log(`Analysis failure detected, initiating graceful degradation with ${errors.length} errors`);
-    
+    console.log(
+      `Analysis failure detected, initiating graceful degradation with ${errors.length} errors`
+    );
+
     const degradedResponse = this.createGracefulDegradationResponse(request, errors, availableData);
-    
+
     // Log the degradation level used
     const degradationLevel = this.getDegradationLevel(degradedResponse);
     LoggingHelper.logWarning(
@@ -2783,7 +2788,7 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
       `Graceful degradation activated at level ${degradationLevel}`,
       'graceful_degradation',
       {
-        errors: errors.map(e => e.code),
+        errors: errors.map((e) => e.code),
         availableDataTypes: availableData ? Object.keys(availableData) : [],
         degradationLevel
       }

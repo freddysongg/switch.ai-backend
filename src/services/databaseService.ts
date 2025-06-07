@@ -884,4 +884,94 @@ Respond with ONLY the JSON object, no additional text.`;
       };
     }
   }
+
+  /**
+   * Keyword search using PostgreSQL full-text search
+   * @param query Raw user query for keyword matching
+   * @returns Array of Switch objects ranked by relevance
+   */
+  async keywordSearch(query: string): Promise<any[]> {
+    try {
+      const cleanedQuery = this.prepareQueryForFTS(query);
+
+      if (!cleanedQuery) {
+        console.warn('Empty query after cleaning, returning empty results');
+        return [];
+      }
+
+      const results = await db.execute<{
+        id: string;
+        name: string;
+        manufacturer: string;
+        type: string | null;
+        topHousing: string | null;
+        bottomHousing: string | null;
+        stem: string | null;
+        mount: string | null;
+        spring: string | null;
+        actuationForce: number | null;
+        bottomForce: number | null;
+        preTravel: number | null;
+        totalTravel: number | null;
+        embedding: any;
+        rank: number;
+      }>(sql`
+        SELECT 
+          s.id,
+          s.name,
+          s.manufacturer,
+          s.type,
+          s.top_housing as "topHousing",
+          s.bottom_housing as "bottomHousing",
+          s.stem,
+          s.mount,
+          s.spring,
+          s.actuation_force as "actuationForce",
+          s.bottom_force as "bottomForce",
+          s.pre_travel as "preTravel",
+          s.total_travel as "totalTravel",
+          s.embedding,
+          ts_rank(s.fts, to_tsquery('english', ${cleanedQuery})) as rank
+        FROM ${switchesTable} AS s
+        WHERE s.fts @@ to_tsquery('english', ${cleanedQuery})
+        ORDER BY rank DESC, s.name ASC
+        LIMIT 20
+      `);
+
+      console.log(`Keyword search for "${query}" found ${results.length} matches`);
+
+      return results;
+    } catch (error) {
+      console.error('Keyword search failed:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Prepares user query for PostgreSQL full-text search
+   */
+  private prepareQueryForFTS(query: string): string {
+    const cleaned = query
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s\-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!cleaned) {
+      return '';
+    }
+
+    const words = cleaned
+      .split(/\s+/)
+      .filter((word) => word.length > 1)
+      .map((word) => word.replace(/[^\w\-]/g, ''))
+      .filter((word) => word.length > 0);
+
+    if (words.length === 0) {
+      return '';
+    }
+
+    return words.join(' & ');
+  }
 }

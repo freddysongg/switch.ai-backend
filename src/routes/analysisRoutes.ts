@@ -14,277 +14,81 @@
  * - GET /test - Test endpoint for development
  */
 
-import { NextFunction, Request, Response, Router } from 'express';
+import express, { NextFunction, Request, Response } from 'express';
 
 import { AnalysisController } from '../controllers/analysisController.js';
-import { AnalysisRequestBody } from '../types/analysisTypes.js';
+import { analysisRequestSchema, intentRequestSchema, validateBody } from '../schemas/validation.js';
 
-const router = Router();
+const router = express.Router();
 const analysisController = new AnalysisController();
 
 /**
- * Request validation middleware for analysis queries
- */
-const validateAnalysisRequest = (req: Request, res: Response, next: NextFunction): void => {
-  const body = req.body as AnalysisRequestBody;
-
-  // Check required fields
-  if (!body.query || typeof body.query !== 'string') {
-    res.status(400).json({
-      error: {
-        code: 'INVALID_REQUEST',
-        message: 'Query field is required and must be a string',
-        details: { field: 'query', type: 'string', required: true }
-      }
-    });
-    return;
-  }
-
-  // Validate query length
-  if (body.query.trim().length === 0) {
-    res.status(400).json({
-      error: {
-        code: 'INVALID_REQUEST',
-        message: 'Query cannot be empty',
-        details: { field: 'query', issue: 'empty_string' }
-      }
-    });
-    return;
-  }
-
-  if (body.query.length > 2000) {
-    res.status(400).json({
-      error: {
-        code: 'INVALID_REQUEST',
-        message: 'Query too long (maximum 2000 characters)',
-        details: { field: 'query', maxLength: 2000, currentLength: body.query.length }
-      }
-    });
-    return;
-  }
-
-  // Validate optional fields
-  if (body.conversationId && typeof body.conversationId !== 'string') {
-    res.status(400).json({
-      error: {
-        code: 'INVALID_REQUEST',
-        message: 'ConversationId must be a string',
-        details: { field: 'conversationId', type: 'string' }
-      }
-    });
-    return;
-  }
-
-  if (body.preferences) {
-    const validDetailLevels = ['brief', 'moderate', 'detailed'];
-    const validTechnicalDepths = ['basic', 'intermediate', 'advanced'];
-
-    if (body.preferences.detailLevel && !validDetailLevels.includes(body.preferences.detailLevel)) {
-      res.status(400).json({
-        error: {
-          code: 'INVALID_REQUEST',
-          message: 'Invalid detail level',
-          details: { field: 'preferences.detailLevel', validValues: validDetailLevels }
-        }
-      });
-      return;
-    }
-
-    if (
-      body.preferences.technicalDepth &&
-      !validTechnicalDepths.includes(body.preferences.technicalDepth)
-    ) {
-      res.status(400).json({
-        error: {
-          code: 'INVALID_REQUEST',
-          message: 'Invalid technical depth',
-          details: { field: 'preferences.technicalDepth', validValues: validTechnicalDepths }
-        }
-      });
-      return;
-    }
-
-    if (
-      body.preferences.maxSwitchesInComparison &&
-      (body.preferences.maxSwitchesInComparison < 2 ||
-        body.preferences.maxSwitchesInComparison > 10)
-    ) {
-      res.status(400).json({
-        error: {
-          code: 'INVALID_REQUEST',
-          message: 'maxSwitchesInComparison must be between 2 and 10',
-          details: { field: 'preferences.maxSwitchesInComparison', min: 2, max: 10 }
-        }
-      });
-      return;
-    }
-  }
-
-  next();
-};
-
-/**
- * Intent recognition validation middleware
- */
-const validateIntentRequest = (req: Request, res: Response, next: NextFunction): void => {
-  const { query } = req.body;
-
-  if (!query || typeof query !== 'string') {
-    res.status(400).json({
-      error: {
-        code: 'INVALID_REQUEST',
-        message: 'Query field is required and must be a string',
-        details: { field: 'query', type: 'string', required: true }
-      }
-    });
-    return;
-  }
-
-  if (query.trim().length === 0) {
-    res.status(400).json({
-      error: {
-        code: 'INVALID_REQUEST',
-        message: 'Query cannot be empty',
-        details: { field: 'query', issue: 'empty_string' }
-      }
-    });
-    return;
-  }
-
-  next();
-};
-
-// ============================================================================
-// MAIN ANALYSIS ENDPOINTS
-// ============================================================================
-
-/**
  * POST /api/analysis/query
+ * Main analysis endpoint for processing user queries about mechanical keyboard switches
+ * Supports single switch analysis, comparisons, material analysis, and follow-up questions
+ * Validates request body using analysisRequestSchema and returns structured AnalysisResponse
  *
- * Main analysis endpoint for processing user queries about mechanical keyboard switches.
- * Supports single switch analysis, comparisons, material analysis, and follow-up questions.
- *
- * Request Body:
- * {
- *   "query": "string (required) - User's natural language query",
- *   "conversationId": "string (optional) - ID for conversation continuity",
- *   "preferences": {
- *     "detailLevel": "brief|moderate|detailed (optional)",
- *     "technicalDepth": "basic|intermediate|advanced (optional)",
- *     "includeRecommendations": "boolean (optional)",
- *     "maxSwitchesInComparison": "number 2-10 (optional)",
- *     "preferredResponseSections": "string[] (optional)",
- *     "focusAreas": "string[] (optional)"
- *   },
- *   "followUpContext": {
- *     "previousQuery": "string (optional)",
- *     "previousResponse": "object (optional)",
- *     "conversationHistory": "array (optional)"
- *   },
- *   "queryHints": {
- *     "expectedIntent": "string (optional)",
- *     "switchNames": "string[] (optional)",
- *     "materials": "string[] (optional)",
- *     "comparisonType": "detailed|quick (optional)"
- *   },
- *   "source": "string (optional) - Request source identifier",
- *   "metadata": "object (optional) - Additional request metadata"
- * }
- *
- * Response: AnalysisResponse JSON with structured switch analysis
+ * @route POST /api/analysis/query
+ * @access Private (requires authentication)
+ * @param {AnalysisRequestBody} req.body - Analysis request with query and preferences
+ * @returns {AnalysisResponse} Structured switch analysis with overview and relevant sections
  */
 router.post(
   '/query',
-  validateAnalysisRequest,
+  validateBody(analysisRequestSchema),
   analysisController.processQuery.bind(analysisController)
 );
 
 /**
  * POST /api/analysis/intent
+ * Intent recognition endpoint for testing and debugging query interpretation
+ * Returns only the intent recognition result without performing full analysis
+ * Useful for understanding how queries are classified and building better UX
  *
- * Intent recognition endpoint for testing and debugging query interpretation.
- * Returns only the intent recognition result without full analysis.
- *
- * Request Body:
- * {
- *   "query": "string (required) - User's natural language query"
- * }
- *
- * Response: IntentRecognitionResult JSON with intent and extracted entities
+ * @route POST /api/analysis/intent
+ * @access Private (requires authentication)
+ * @param {IntentRequestBody} req.body - Simple request with query string
+ * @returns {IntentRecognitionResult} Intent classification with confidence scores
  */
 router.post(
   '/intent',
-  validateIntentRequest,
+  validateBody(intentRequestSchema),
   analysisController.recognizeIntent.bind(analysisController)
 );
 
-// ============================================================================
-// SERVICE MANAGEMENT ENDPOINTS
-// ============================================================================
-
 /**
  * GET /api/analysis/health
+ * Health check endpoint for the analysis service
+ * Returns service status, dependencies, and performance metrics
+ * Used by load balancers and monitoring systems to verify service availability
  *
- * Service health check endpoint for monitoring service availability.
- * Returns system status, database connectivity, and LLM service status.
- *
- * Response:
- * {
- *   "status": "healthy|degraded|unhealthy",
- *   "timestamp": "ISO timestamp",
- *   "services": {
- *     "database": "healthy|error",
- *     "llm": "healthy|error",
- *     "promptHelper": "healthy|error"
- *   },
- *   "version": "string",
- *   "uptime": "number (seconds)"
- * }
+ * @route GET /api/analysis/health
+ * @access Public
+ * @returns {HealthCheckResponse} Service health status and metadata
  */
 router.get('/health', analysisController.healthCheck.bind(analysisController));
 
 /**
  * GET /api/analysis/config
+ * Service configuration endpoint for debugging and client integration
+ * Returns current service configuration, capabilities, and feature flags
+ * Helps client applications understand available features and limits
  *
- * Service configuration endpoint for debugging and monitoring.
- * Returns current service configuration and capabilities.
- *
- * Response:
- * {
- *   "version": "string",
- *   "features": {
- *     "singleSwitchAnalysis": "boolean",
- *     "switchComparison": "boolean",
- *     "materialAnalysis": "boolean",
- *     "followUpQueries": "boolean"
- *   },
- *   "limits": {
- *     "maxQueryLength": "number",
- *     "maxSwitchesInComparison": "number",
- *     "maxConversationHistory": "number"
- *   },
- *   "llmConfig": {
- *     "model": "string",
- *     "maxTokens": "number",
- *     "temperature": "number"
- *   }
- * }
+ * @route GET /api/analysis/config
+ * @access Private (requires authentication)
+ * @returns {ServiceConfigResponse} Service configuration and capabilities
  */
 router.get('/config', analysisController.getServiceConfig.bind(analysisController));
 
 /**
  * GET /api/analysis/test
+ * Test endpoint for development and debugging
+ * Returns basic service information, sample queries, and endpoint documentation
+ * Useful for verifying service deployment and exploring API capabilities
  *
- * Test endpoint for development and debugging.
- * Returns basic service information and sample query examples.
- *
- * Response:
- * {
- *   "message": "Switch Analysis Service Test Endpoint",
- *   "timestamp": "ISO timestamp",
- *   "sampleQueries": "string[]",
- *   "supportedIntents": "string[]"
- * }
+ * @route GET /api/analysis/test
+ * @access Public
+ * @returns {TestEndpointResponse} Service information and usage examples
  */
 router.get('/test', (req: Request, res: Response) => {
   res.json({
@@ -311,14 +115,19 @@ router.get('/test', (req: Request, res: Response) => {
   });
 });
 
-// ============================================================================
-// ERROR HANDLING
-// ============================================================================
-
 /**
  * Global error handler for analysis routes
+ * Catches unhandled errors from route handlers and middleware
+ * Provides consistent error response format and logging
+ * Prevents application crashes from propagating to clients
+ *
+ * @param error - The caught error object
+ * @param req - Express request object
+ * @param res - Express response object
+ * @param next - Express next function
+ * @returns void
  */
-router.use((error: any, req: Request, res: Response, next: NextFunction) => {
+router.use((error: any, req: Request, res: Response, _: NextFunction) => {
   console.error('[AnalysisRoutes] Unhandled error:', error);
 
   res.status(500).json({

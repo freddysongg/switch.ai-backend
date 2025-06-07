@@ -3,6 +3,8 @@
  *
  * This utility provides standardized console logging throughout the analysis process
  * with detailed step-by-step tracking for debugging purposes.
+ *
+ * This is a development utility and is not used in production.
  */
 
 import type {
@@ -11,62 +13,72 @@ import type {
   DatabaseContext,
   LLMResponse,
   LogEntry,
-  LogLevel,
-  ProcessingStep,
-  StepLog
+  LogLevel
 } from '../types/analysisTypes.js';
 
 export class LoggingHelper {
   private static readonly LOG_PREFIX = '[SwitchAnalysis]';
 
   /**
-   * Log analysis request receipt (FR5.1)
+   * Log analysis request receipt
    * @param request The incoming analysis request
    * @param requestId Unique identifier for this request
    */
   static logRequestReceived(request: AnalysisRequest, requestId: string): void {
     const timestamp = new Date().toISOString();
-    
+
     const sanitizedQuery = request.query
-      .replace(/\b[\w._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, '[EMAIL_REDACTED]') 
-      .replace(/\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g, '[CARD_REDACTED]') 
-      .substring(0, 500); 
-    
+      .replace(/\b[\w._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, '[EMAIL_REDACTED]')
+      .replace(/\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g, '[CARD_REDACTED]')
+      .substring(0, 500);
+
     console.log(`${this.LOG_PREFIX} [${requestId}] ======= REQUEST RECEIVED =======`);
     console.log(`${this.LOG_PREFIX} [${requestId}] Timestamp: ${timestamp}`);
     console.log(`${this.LOG_PREFIX} [${requestId}] User ID: ${request.userId || 'anonymous'}`);
     console.log(`${this.LOG_PREFIX} [${requestId}] Query: "${sanitizedQuery}"`);
-    console.log(`${this.LOG_PREFIX} [${requestId}] Query Length: ${request.query.length} characters`);
+    console.log(
+      `${this.LOG_PREFIX} [${requestId}] Query Length: ${request.query.length} characters`
+    );
     console.log(`${this.LOG_PREFIX} [${requestId}] Source: ${request.source || 'unknown'}`);
-    
+
     if (request.conversationId) {
       console.log(`${this.LOG_PREFIX} [${requestId}] Conversation ID: ${request.conversationId}`);
     }
-    
+
     if (request.preferences) {
-      console.log(`${this.LOG_PREFIX} [${requestId}] Preferences: detail=${request.preferences.detailLevel}, tech=${request.preferences.technicalDepth}, recs=${request.preferences.includeRecommendations}`);
+      console.log(
+        `${this.LOG_PREFIX} [${requestId}] Preferences: detail=${request.preferences.detailLevel}, tech=${request.preferences.technicalDepth}, recs=${request.preferences.includeRecommendations}`
+      );
       if (request.preferences.maxSwitchesInComparison) {
-        console.log(`${this.LOG_PREFIX} [${requestId}] Max switches for comparison: ${request.preferences.maxSwitchesInComparison}`);
+        console.log(
+          `${this.LOG_PREFIX} [${requestId}] Max switches for comparison: ${request.preferences.maxSwitchesInComparison}`
+        );
       }
     }
-    
+
     if (request.followUpContext?.conversationHistory?.length) {
-      console.log(`${this.LOG_PREFIX} [${requestId}] Follow-up context: ${request.followUpContext.conversationHistory.length} previous messages`);
+      console.log(
+        `${this.LOG_PREFIX} [${requestId}] Follow-up context: ${request.followUpContext.conversationHistory.length} previous messages`
+      );
     }
-    
+
     if (request.metadata) {
       const clientInfo = {
-        userAgent: request.metadata.userAgent ? request.metadata.userAgent.substring(0, 100) + '...' : 'unknown',
+        userAgent: request.metadata.userAgent
+          ? request.metadata.userAgent.substring(0, 100) + '...'
+          : 'unknown',
         clientIP: request.metadata.clientIP || 'unknown'
       };
-      console.log(`${this.LOG_PREFIX} [${requestId}] Client: ${clientInfo.userAgent} | IP: ${clientInfo.clientIP}`);
+      console.log(
+        `${this.LOG_PREFIX} [${requestId}] Client: ${clientInfo.userAgent} | IP: ${clientInfo.clientIP}`
+      );
     }
-    
+
     console.log(`${this.LOG_PREFIX} [${requestId}] ============================================`);
   }
 
   /**
-   * Log intent recognition results (FR5.2)
+   * Log intent recognition results
    * @param requestId Request identifier
    * @param intent Recognized intent
    * @param confidence Confidence score
@@ -79,63 +91,77 @@ export class LoggingHelper {
     entities: any
   ): void {
     const timestamp = new Date().toISOString();
-    
+
     console.log(`${this.LOG_PREFIX} [${requestId}] ===== INTENT RECOGNITION =====`);
     console.log(`${this.LOG_PREFIX} [${requestId}] Timestamp: ${timestamp}`);
     console.log(`${this.LOG_PREFIX} [${requestId}] Determined Intent: ${intent}`);
     console.log(`${this.LOG_PREFIX} [${requestId}] Confidence: ${(confidence * 100).toFixed(1)}%`);
-    
+
     const confidenceLevel = confidence >= 0.8 ? 'HIGH' : confidence >= 0.6 ? 'MODERATE' : 'LOW';
     console.log(`${this.LOG_PREFIX} [${requestId}] Confidence Level: ${confidenceLevel}`);
-    
+
     if (entities) {
       console.log(`${this.LOG_PREFIX} [${requestId}] Extracted Entities:`);
-      
+
       if (entities.switches && entities.switches.length > 0) {
-        console.log(`${this.LOG_PREFIX} [${requestId}]   - Switches: [${entities.switches.join(', ')}] (${entities.switches.length} found)`);
+        console.log(
+          `${this.LOG_PREFIX} [${requestId}]   - Switches: [${entities.switches.join(', ')}] (${entities.switches.length} found)`
+        );
       } else {
         console.log(`${this.LOG_PREFIX} [${requestId}]   - Switches: None identified`);
       }
-      
+
       if (entities.materials && entities.materials.length > 0) {
-        console.log(`${this.LOG_PREFIX} [${requestId}]   - Materials: [${entities.materials.join(', ')}] (${entities.materials.length} found)`);
+        console.log(
+          `${this.LOG_PREFIX} [${requestId}]   - Materials: [${entities.materials.join(', ')}] (${entities.materials.length} found)`
+        );
       } else {
         console.log(`${this.LOG_PREFIX} [${requestId}]   - Materials: None identified`);
       }
-      
+
       if (entities.properties && entities.properties.length > 0) {
-        console.log(`${this.LOG_PREFIX} [${requestId}]   - Properties: [${entities.properties.join(', ')}] (${entities.properties.length} found)`);
+        console.log(
+          `${this.LOG_PREFIX} [${requestId}]   - Properties: [${entities.properties.join(', ')}] (${entities.properties.length} found)`
+        );
       } else {
         console.log(`${this.LOG_PREFIX} [${requestId}]   - Properties: None identified`);
       }
-      
+
       if (entities.comparisonType) {
-        console.log(`${this.LOG_PREFIX} [${requestId}]   - Comparison Type: ${entities.comparisonType}`);
+        console.log(
+          `${this.LOG_PREFIX} [${requestId}]   - Comparison Type: ${entities.comparisonType}`
+        );
       }
-      
+
       if (entities.questionType) {
-        console.log(`${this.LOG_PREFIX} [${requestId}]   - Question Type: ${entities.questionType}`);
+        console.log(
+          `${this.LOG_PREFIX} [${requestId}]   - Question Type: ${entities.questionType}`
+        );
       }
-      
+
       if (entities.alternatives && entities.alternatives.length > 0) {
         console.log(`${this.LOG_PREFIX} [${requestId}]   - Alternative Intents:`);
         entities.alternatives.forEach((alt: any, index: number) => {
-          console.log(`${this.LOG_PREFIX} [${requestId}]     ${index + 1}. ${alt.intent} (${(alt.confidence * 100).toFixed(1)}%)`);
+          console.log(
+            `${this.LOG_PREFIX} [${requestId}]     ${index + 1}. ${alt.intent} (${(alt.confidence * 100).toFixed(1)}%)`
+          );
         });
       }
     } else {
       console.log(`${this.LOG_PREFIX} [${requestId}] No entities extracted`);
     }
-    
+
     if (confidence < 0.5) {
-      console.warn(`${this.LOG_PREFIX} [${requestId}] ⚠️  Low confidence intent recognition - may require fallback processing`);
+      console.warn(
+        `${this.LOG_PREFIX} [${requestId}] ⚠️  Low confidence intent recognition - may require fallback processing`
+      );
     }
-    
+
     console.log(`${this.LOG_PREFIX} [${requestId}] =====================================`);
   }
 
   /**
-   * Log database lookup results (FR5.2)
+   * Log database lookup results
    * @param requestId Request identifier
    * @param lookupResults Database lookup results
    * @param lookupTimeMs Time taken for lookup
@@ -177,7 +203,7 @@ export class LoggingHelper {
   }
 
   /**
-   * Log prompt construction details (FR5.2)
+   * Log prompt construction details
    * @param requestId Request identifier
    * @param promptLength Length of constructed prompt
    * @param includesDbData Whether database data was included
@@ -190,14 +216,15 @@ export class LoggingHelper {
     intent: string
   ): void {
     const timestamp = new Date().toISOString();
-    
+
     console.log(`${this.LOG_PREFIX} [${requestId}] ===== PROMPT CONSTRUCTION =====`);
     console.log(`${this.LOG_PREFIX} [${requestId}] Timestamp: ${timestamp}`);
     console.log(`${this.LOG_PREFIX} [${requestId}] Intent: ${intent}`);
     console.log(`${this.LOG_PREFIX} [${requestId}] Prompt Length: ${promptLength} characters`);
-    console.log(`${this.LOG_PREFIX} [${requestId}] Database Data Included: ${includesDbData ? 'YES' : 'NO'}`);
+    console.log(
+      `${this.LOG_PREFIX} [${requestId}] Database Data Included: ${includesDbData ? 'YES' : 'NO'}`
+    );
 
-    // Log prompt characteristics without exposing full content
     const sizeCategory =
       promptLength < 1000
         ? 'small'
@@ -208,29 +235,39 @@ export class LoggingHelper {
             : 'very large';
 
     const estimatedTokens = Math.ceil(promptLength / 4);
-    console.log(`${this.LOG_PREFIX} [${requestId}] Prompt Size Category: ${sizeCategory.toUpperCase()}`);
+    console.log(
+      `${this.LOG_PREFIX} [${requestId}] Prompt Size Category: ${sizeCategory.toUpperCase()}`
+    );
     console.log(`${this.LOG_PREFIX} [${requestId}] Estimated Tokens: ~${estimatedTokens}`);
-    
-    const estimatedInputCost = (estimatedTokens / 1000000) * 1.25; 
-    console.log(`${this.LOG_PREFIX} [${requestId}] Estimated Input Cost: ~$${estimatedInputCost.toFixed(6)}`);
-    
+
+    const estimatedInputCost = (estimatedTokens / 1000000) * 1.25;
+    console.log(
+      `${this.LOG_PREFIX} [${requestId}] Estimated Input Cost: ~$${estimatedInputCost.toFixed(6)}`
+    );
+
     if (promptLength < 500) {
-      console.warn(`${this.LOG_PREFIX} [${requestId}] ⚠️  Short prompt - may lack sufficient context`);
+      console.warn(
+        `${this.LOG_PREFIX} [${requestId}] ⚠️  Short prompt - may lack sufficient context`
+      );
     } else if (promptLength > 10000) {
-      console.warn(`${this.LOG_PREFIX} [${requestId}] ⚠️  Very long prompt - may approach model limits`);
+      console.warn(
+        `${this.LOG_PREFIX} [${requestId}] ⚠️  Very long prompt - may approach model limits`
+      );
     }
-    
+
     if (includesDbData) {
       console.log(`${this.LOG_PREFIX} [${requestId}] ✅ Enhanced with database specifications`);
     } else {
-      console.log(`${this.LOG_PREFIX} [${requestId}] ⚠️  No database data - relying on general knowledge`);
+      console.log(
+        `${this.LOG_PREFIX} [${requestId}] ⚠️  No database data - relying on general knowledge`
+      );
     }
-    
+
     console.log(`${this.LOG_PREFIX} [${requestId}] ======================================`);
   }
 
   /**
-   * Log LLM interaction details (FR5.3)
+   * Log LLM interaction details
    * @param requestId Request identifier
    * @param llmResponse Raw LLM response with usage metrics
    * @param responseTimeMs Time taken for LLM generation
@@ -248,7 +285,6 @@ export class LoggingHelper {
       `${this.LOG_PREFIX} [${requestId}] Response length: ${llmResponse.content.length} chars, Finish reason: ${llmResponse.finishReason || 'unknown'}`
     );
 
-    // Calculate tokens per second for performance monitoring
     if (llmResponse.usage?.completionTokens && responseTimeMs > 0) {
       const tokensPerSecond = Math.round(
         (llmResponse.usage.completionTokens / responseTimeMs) * 1000
@@ -258,7 +294,6 @@ export class LoggingHelper {
       );
     }
 
-    // Log any potential issues
     if (responseTimeMs > 30000) {
       console.warn(
         `${this.LOG_PREFIX} [${requestId}] Slow LLM response (${responseTimeMs}ms) - consider optimization`
@@ -271,7 +306,7 @@ export class LoggingHelper {
   }
 
   /**
-   * Log processing step updates (FR5.1)
+   * Log processing step updates
    * @param requestId Request identifier
    * @param stepName Name of the processing step
    * @param status Current status of the step
@@ -300,7 +335,6 @@ export class LoggingHelper {
     );
 
     if (data) {
-      // Log relevant data without overwhelming output
       if (typeof data === 'object') {
         const dataKeys = Object.keys(data);
         if (dataKeys.length <= 3) {
@@ -319,7 +353,7 @@ export class LoggingHelper {
   }
 
   /**
-   * Log workflow completion summary (FR5.1)
+   * Log workflow completion summary
    * @param workflow Complete workflow with all steps and timing
    */
   static logWorkflowCompletion(workflow: AnalysisWorkflow): void {
@@ -332,7 +366,6 @@ export class LoggingHelper {
     console.log(`${this.LOG_PREFIX} [${workflow.requestId}] Query: "${workflow.userQuery}"`);
     console.log(`${this.LOG_PREFIX} [${workflow.requestId}] Total duration: ${totalTime}ms`);
 
-    // Log step-by-step breakdown
     const stepEntries = Object.entries(workflow.steps);
     stepEntries.forEach(([stepName, stepData]) => {
       const stepDuration =
@@ -348,7 +381,6 @@ export class LoggingHelper {
       );
     });
 
-    // Performance summary
     if (totalTime > 0) {
       const performance = totalTime < 3000 ? 'FAST' : totalTime < 8000 ? 'MODERATE' : 'SLOW';
       console.log(`${this.LOG_PREFIX} [${workflow.requestId}] Performance: ${performance}`);
@@ -360,7 +392,7 @@ export class LoggingHelper {
   }
 
   /**
-   * Log errors with context (FR5.2)
+   * Log errors with context
    * @param requestId Request identifier
    * @param error Error object or message
    * @param step Processing step where error occurred
@@ -388,7 +420,7 @@ export class LoggingHelper {
   }
 
   /**
-   * Log warning conditions (FR5.2)
+   * Log warning conditions
    * @param requestId Request identifier
    * @param message Warning message
    * @param step Processing step context
@@ -406,7 +438,7 @@ export class LoggingHelper {
   }
 
   /**
-   * Create structured log entry (FR5.1)
+   * Create structured log entry
    * @param level Log level
    * @param step Processing step
    * @param message Log message
@@ -513,7 +545,6 @@ export class LoggingHelper {
       );
     }
 
-    // Log any custom metrics
     Object.entries(metrics).forEach(([key, value]) => {
       if (
         ![

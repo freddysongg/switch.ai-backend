@@ -1,12 +1,6 @@
 /**
  * Response Validator Utility for SwitchAI Response Quality Enhancement
  *
- * Following intentMapping.ts success patterns:
- * - Single source of truth for validation logic
- * - Deterministic validation behavior
- * - Comprehensive input handling with fallbacks
- * - Clear type safety with TypeScript interfaces
- *
  * Purpose: Validate response structure and format before delivery to resolve
  * test compliance issues and ensure consistent markdown structure
  */
@@ -52,7 +46,6 @@ export interface ValidationWarning {
 
 /**
  * Main validation function - validates response content against intent requirements
- * Following intentMapping's deterministic pattern
  */
 export function validateMarkdownStructure(content: string, intent: QueryIntent): ValidationResult {
   const normalizedIntent = validateIntent(intent);
@@ -98,7 +91,6 @@ export function validateMarkdownStructure(content: string, intent: QueryIntent):
 
 /**
  * Validate that all required sections are present
- * Following intentMapping's comprehensive checking pattern
  */
 export function validateRequiredSections(
   content: string,
@@ -152,7 +144,6 @@ export function validateRequiredSections(
 
 /**
  * Validate overall markdown formatting
- * Following intentMapping's format checking patterns
  */
 export function validateMarkdownFormat(content: string): {
   errors: ValidationError[];
@@ -213,7 +204,7 @@ export function validateMarkdownFormat(content: string): {
 }
 
 /**
- * ENHANCEMENT: Comprehensive markdown formatting consistency checks
+ * Comprehensive markdown formatting consistency checks
  * Validates headers, tables, bullet points with strict standards
  */
 function validateStrictMarkdownFormatting(content: string): {
@@ -578,7 +569,6 @@ function groupTableLines(tableLines: string[], content: string): string[][] {
 
 /**
  * Validate content structure and organization
- * Following intentMapping's structural validation patterns
  */
 export function validateContentStructure(
   content: string,
@@ -864,7 +854,7 @@ function validateTableStructure(table: string): {
 }
 
 function calculateComplianceScores(validationResults: any): ComplianceScores {
-  const { sectionValidation, formatValidation, structureValidation, tableValidation } =
+  const { sectionValidation, formatValidation, structureValidation, _tableValidation } =
     validationResults;
 
   const sectionScore =

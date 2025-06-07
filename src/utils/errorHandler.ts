@@ -1,14 +1,8 @@
 /**
  * Error Handler Utility for SwitchAI Response Quality Enhancement
  *
- * Following intentMapping.ts success patterns:
- * - Single source of truth for error classification
- * - Deterministic error handling with fallbacks
- * - Comprehensive input handling with graceful degradation
- * - Clear type safety with TypeScript interfaces
- *
  * Purpose: Handle API errors, intent failures, database errors, and format recovery
- * while maintaining markdown structure requirements (Task 3.4)
+ * while maintaining markdown structure requirements
  */
 
 import { AnalysisResponse, QueryIntent } from '../types/analysisTypes.js';
@@ -46,7 +40,6 @@ export type FallbackStrategy =
 
 /**
  * Main error classification function
- * Following intentMapping's deterministic pattern
  */
 export function classifyError(error: any, context?: any): ErrorClassification {
   if (error?.message?.includes('429 Too Many Requests')) {
@@ -119,7 +112,6 @@ export function classifyError(error: any, context?: any): ErrorClassification {
 
 /**
  * Create error response with proper markdown structure
- * Ensures error responses still meet format compliance requirements
  */
 export function createErrorResponse(
   classification: ErrorClassification,
@@ -302,7 +294,7 @@ export function logError(classification: ErrorClassification, context?: any): vo
  */
 export function createQualityFallbackResponse(
   query: string,
-  intent: QueryIntent = 'general_switch_info'
+  _intent: QueryIntent = 'general_switch_info'
 ): AnalysisResponse {
   return {
     overview: `While I'm experiencing some technical limitations, I can still provide helpful guidance about your query: "${query}". This response uses built-in knowledge to ensure you receive useful information.`,

@@ -9,22 +9,18 @@ export interface TestCase {
   description: string;
   category: 'unit' | 'integration' | 'manual' | 'regression';
 
-  // Input
   query: string;
   context?: any;
 
-  // Expected outcomes
   expectedIntent?: string;
   expectedEntities?: string[];
   expectedSwitches?: string[];
   expectedSections?: string[];
 
-  // Validation criteria
   minimumQualityScore?: number;
   mustIncludeTerms?: string[];
   mustNotIncludeTerms?: string[];
 
-  // For comparison tests
   shouldPreferDatabase?: boolean;
   expectedTableColumns?: string[];
 
@@ -95,7 +91,7 @@ export class TestingService {
     try {
       let response;
       let processingContext;
-      let testRequestId = `test-${testCase.id}-${Date.now()}`;
+      const testRequestId = `test-${testCase.id}-${Date.now()}`;
 
       if (testCase.category === 'unit') {
         const unitTestResult = await this.runUnitTest(testCase);

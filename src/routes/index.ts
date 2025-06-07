@@ -12,7 +12,6 @@ import userRouter from './user.js';
 
 const router = Router();
 
-// Public routes
 router.use('/health', healthRouter);
 router.use('/auth', authRouter);
 

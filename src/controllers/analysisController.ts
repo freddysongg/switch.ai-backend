@@ -19,8 +19,13 @@ const llmAnalysisService = new LLMAnalysisService();
 
 export class AnalysisController {
   /**
-   * Main endpoint for processing switch analysis queries (FR1.1, FR3.1)
-   * POST /api/analysis/query
+   * Main endpoint for processing switch analysis queries
+   * Handles request validation, orchestrates service calls, and returns structured responses
+   * Supports various query types including single switch analysis, comparisons, and follow-ups
+   *
+   * @param req - Express request object containing the analysis request body
+   * @param res - Express response object for sending the analysis response
+   * @returns Promise<void>
    */
   async processQuery(req: Request, res: Response): Promise<void> {
     const requestId = LoggingHelper.generateRequestId();
@@ -29,14 +34,12 @@ export class AnalysisController {
       const requestBody = req.body as AnalysisRequestBody;
       const userId = req.user?.id;
 
-      // Authentication validation
       if (!userId) {
         LoggingHelper.logError(requestId, 'Unauthorized access attempt', 'authentication');
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }
 
-      // Enhanced input validation (FR1.1)
       const validationResult = this.validateRequestBody(requestBody);
       if (!validationResult.isValid) {
         LoggingHelper.logError(
@@ -52,17 +55,13 @@ export class AnalysisController {
         return;
       }
 
-      // Create comprehensive AnalysisRequest object
       const analysisRequest: AnalysisRequest = {
-        // Core query fields
         query: requestBody.query.trim(),
         conversationId: requestBody.conversationId,
         userId,
 
-        // Follow-up context
         followUpContext: requestBody.followUpContext,
 
-        // User preferences with defaults
         preferences: {
           detailLevel: requestBody.preferences?.detailLevel || 'moderate',
           technicalDepth: requestBody.preferences?.technicalDepth || 'intermediate',
@@ -74,15 +73,12 @@ export class AnalysisController {
           preferredResponseSections: requestBody.preferences?.preferredResponseSections || []
         },
 
-        // Request metadata
         requestId,
         timestamp: new Date(),
         source: (requestBody.source as 'web' | 'api' | 'mobile') || 'api',
 
-        // Query hints
         queryHints: requestBody.queryHints,
 
-        // Additional metadata
         metadata: {
           ...requestBody.metadata,
           userAgent: req.headers['user-agent'],
@@ -92,16 +88,13 @@ export class AnalysisController {
 
       LoggingHelper.logRequestReceived(analysisRequest, requestId);
 
-      // Main processing workflow - returns AnalysisResponse directly
       const analysisResponse = await llmAnalysisService.processAnalysisRequest(analysisRequest);
 
-      // Check if response contains an error
       if (analysisResponse.error) {
         this.handleAnalysisError(res, analysisResponse.error, requestId);
         return;
       }
 
-      // Successful response
       res.json({
         ...analysisResponse,
         requestId,
@@ -110,7 +103,6 @@ export class AnalysisController {
     } catch (error: any) {
       LoggingHelper.logError(requestId, error, 'critical_controller_error');
 
-      // Check if headers have already been sent before trying to send another response
       if (!res.headersSent) {
         res.status(500).json({
           error: 'Internal server error during analysis processing.',
@@ -122,14 +114,15 @@ export class AnalysisController {
   }
 
   /**
-   * Validate the request body structure and content (FR1.1)
-   * @param requestBody The request body to validate
-   * @returns Validation result with errors if any
+   * Validates the request body structure and content for analysis requests
+   * Checks for required fields, proper types, and business rule constraints
+   *
+   * @param requestBody - The request body object to validate
+   * @returns Object containing validation result and any error messages
    */
   private validateRequestBody(requestBody: any): { isValid: boolean; errors: string[] } {
     const errors: string[] = [];
 
-    // Required field validation
     if (
       !requestBody.query ||
       typeof requestBody.query !== 'string' ||
@@ -138,17 +131,14 @@ export class AnalysisController {
       errors.push('Query is required and must be a non-empty string.');
     }
 
-    // Query length validation
     if (requestBody.query && requestBody.query.length > 2000) {
       errors.push('Query is too long. Maximum length is 2000 characters.');
     }
 
-    // Conversation ID validation
     if (requestBody.conversationId && typeof requestBody.conversationId !== 'string') {
       errors.push('Conversation ID must be a string.');
     }
 
-    // Preferences validation
     if (requestBody.preferences) {
       const prefs = requestBody.preferences;
 
@@ -177,7 +167,6 @@ export class AnalysisController {
       }
     }
 
-    // Follow-up context validation
     if (requestBody.followUpContext) {
       const context = requestBody.followUpContext;
 
@@ -190,7 +179,6 @@ export class AnalysisController {
       }
     }
 
-    // Query hints validation
     if (requestBody.queryHints) {
       const hints = requestBody.queryHints;
 
@@ -214,8 +202,13 @@ export class AnalysisController {
   }
 
   /**
-   * Endpoint for recognizing query intent (FR1.2)
-   * POST /api/analysis/intent
+   * Endpoint for recognizing query intent without performing full analysis
+   * Useful for debugging, testing, and providing query suggestions to users
+   * Returns intent classification and confidence scores
+   *
+   * @param req - Express request object containing the query to analyze
+   * @param res - Express response object for sending the intent recognition result
+   * @returns Promise<void>
    */
   async recognizeIntent(req: Request, res: Response): Promise<void> {
     const requestId = LoggingHelper.generateRequestId();
@@ -270,7 +263,6 @@ export class AnalysisController {
         return;
       }
 
-      // Attempt intent recognition with enhanced error handling
       let intentResult;
       try {
         intentResult = await llmAnalysisService.recognizeIntent(query.trim(), requestId);
@@ -280,7 +272,8 @@ export class AnalysisController {
         if (intentError.message.includes('timeout')) {
           analysisError = {
             code: 'TIMEOUT',
-            message: 'Intent recognition took too long to complete. Please try with a simpler query.',
+            message:
+              'Intent recognition took too long to complete. Please try with a simpler query.',
             recoverable: true,
             step: 'intent_recognition',
             timestamp: new Date(),
@@ -298,7 +291,8 @@ export class AnalysisController {
         } else {
           analysisError = {
             code: 'INTENT_RECOGNITION_FAILED',
-            message: 'Unable to understand your query. Please try rephrasing with specific switch names or clearer language.',
+            message:
+              'Unable to understand your query. Please try rephrasing with specific switch names or clearer language.',
             recoverable: true,
             step: 'intent_recognition',
             timestamp: new Date(),
@@ -318,11 +312,11 @@ export class AnalysisController {
         return;
       }
 
-      // Validate intent result quality
       if (!intentResult || !intentResult.intent || intentResult.confidence < 0.3) {
         const lowConfidenceError: AnalysisError = {
           code: 'INTENT_RECOGNITION_FAILED',
-          message: 'I had difficulty understanding your query. Please try being more specific about what you want to know.',
+          message:
+            'I had difficulty understanding your query. Please try being more specific about what you want to know.',
           recoverable: true,
           step: 'intent_validation',
           timestamp: new Date(),
@@ -341,14 +335,20 @@ export class AnalysisController {
         intent: intentResult,
         timestamp: new Date().toISOString(),
         confidence: intentResult.confidence,
-        processingQuality: intentResult.confidence >= 0.8 ? 'high' : intentResult.confidence >= 0.6 ? 'medium' : 'low'
+        processingQuality:
+          intentResult.confidence >= 0.8
+            ? 'high'
+            : intentResult.confidence >= 0.6
+              ? 'medium'
+              : 'low'
       });
     } catch (error: any) {
       LoggingHelper.logError(requestId, error, 'intent_recognition_critical_error');
 
       const criticalError: AnalysisError = {
         code: 'INTERNAL_ERROR',
-        message: 'A critical error occurred during intent recognition. Please try again or contact support.',
+        message:
+          'A critical error occurred during intent recognition. Please try again or contact support.',
         recoverable: true,
         step: 'intent_recognition_critical',
         timestamp: new Date(),
@@ -365,7 +365,12 @@ export class AnalysisController {
 
   /**
    * Health check endpoint for the analysis service
-   * GET /api/analysis/health
+   * Verifies service availability and dependency status
+   * Used by load balancers and monitoring systems
+   *
+   * @param req - Express request object
+   * @param res - Express response object for sending health status
+   * @returns Promise<void>
    */
   async healthCheck(req: Request, res: Response): Promise<void> {
     try {
@@ -396,7 +401,12 @@ export class AnalysisController {
 
   /**
    * Get analysis service configuration and capabilities
-   * GET /api/analysis/config
+   * Returns supported features, limits, and service metadata
+   * Useful for client applications and API documentation
+   *
+   * @param req - Express request object
+   * @param res - Express response object for sending configuration data
+   * @returns Promise<void>
    */
   async getServiceConfig(req: Request, res: Response): Promise<void> {
     try {
@@ -450,18 +460,21 @@ export class AnalysisController {
   }
 
   /**
-   * Handle analysis errors and return appropriate responses (FR6.1, FR6.2)
-   * @param res Express response object
-   * @param error Analysis error object
-   * @param requestId Request identifier for logging
+   * Handles analysis errors and returns appropriate HTTP responses
+   * Maps error codes to status codes and provides user-friendly messages
+   * Includes retry information and debugging context when appropriate
+   *
+   * @param res - Express response object for sending error response
+   * @param error - Analysis error object containing error details
+   * @param requestId - Request identifier for logging and tracking
+   * @returns void
    */
   private handleAnalysisError(res: Response, error: AnalysisError, requestId: string): void {
     LoggingHelper.logError(requestId, error, 'analysis_error_handling');
 
-    // Determine appropriate status code based on error code
     let statusCode = 500;
-    let userMessage = error.message; // Use the user-friendly message from the error
-    let additionalContext: any = {};
+    const userMessage = error.message;
+    const additionalContext: any = {};
 
     switch (error.code) {
       case 'INVALID_QUERY':
@@ -492,7 +505,8 @@ export class AnalysisController {
         break;
       case 'RESPONSE_VALIDATION_FAILED':
         statusCode = 500;
-        additionalContext.userAction = 'Please try rephrasing your query or ask about a different topic';
+        additionalContext.userAction =
+          'Please try rephrasing your query or ask about a different topic';
         break;
       case 'TIMEOUT':
         statusCode = 504;
@@ -531,7 +545,6 @@ export class AnalysisController {
         additionalContext.supportContact = 'Please contact support if this error persists';
     }
 
-    // Enhanced error response structure
     const errorResponse: any = {
       error: userMessage,
       errorCode: error.code,
@@ -540,32 +553,26 @@ export class AnalysisController {
       retryable: error.recoverable || false
     };
 
-    // Add step-specific context if available
     if (error.step) {
       errorResponse.failedAt = error.step;
     }
 
-    // Add additional context without sensitive information
     if (Object.keys(additionalContext).length > 0) {
       errorResponse.context = additionalContext;
     }
 
-    // Add guidance if available in error details
     if (error.details?.guidance) {
       errorResponse.guidance = error.details.guidance;
     }
 
-    // Add user suggestions if available
     if (error.details?.suggestions) {
       errorResponse.suggestions = error.details.suggestions;
     }
 
-    // Add retry information for recoverable errors
     if (error.recoverable && error.retryDelay) {
       errorResponse.retryAfter = Math.ceil(error.retryDelay / 1000);
     }
 
-    // Development mode: add more technical details
     if (process.env.NODE_ENV === 'development' && error.details) {
       errorResponse.debugInfo = {
         errorType: error.details.errorType,
@@ -574,7 +581,6 @@ export class AnalysisController {
       };
     }
 
-    // Return structured error response
     if (!res.headersSent) {
       res.status(statusCode).json(errorResponse);
     }

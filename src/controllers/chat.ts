@@ -44,7 +44,6 @@ export class ChatController {
       res.json(responseData);
     } catch (error: any) {
       console.error('Critical Chat controller error:', error.message || error, error.stack);
-      // Check if headers have already been sent before trying to send another response
       if (!res.headersSent) {
         res.status(500).json({
           id: `ctrl-error-${Date.now()}`,

@@ -1,5 +1,7 @@
 import { AI_CONFIG } from '../config/ai.config.js';
 import { ChatMessage } from '../types/chat.js';
+import { DatabaseSanitizer } from '../utils/databaseSanitizer.js';
+import { PIIScrubber, PIIUtils } from '../utils/pii-scrubber.js';
 
 interface SwitchContextItem {
   name: string;
@@ -16,9 +18,9 @@ export class PromptBuilder {
    * Build the final prompt string by concatenating structured components:
    * 1) Role Definition
    * 2) Core Task Description
-   * 3) Conversation History (Context)
+   * 3) Conversation History (Context) - with PII scrubbing
    * 4) Retrieved Knowledge Base Information (Context)
-   * 5) Current User Query
+   * 5) Current User Query - with PII scrubbing
    * 6) Output Format Instructions
    * 7) Output Qualities and Constraints
    * 8) Behavioral Guideline (Factualness)
@@ -28,7 +30,7 @@ export class PromptBuilder {
     retrievedContexts: SwitchContextItem[],
     userQuery: string
   ): string {
-    const P = AI_CONFIG.PROMPT_COMPONENTS; // Alias for brevity
+    const P = AI_CONFIG.PROMPT_COMPONENTS;
     let prompt = '';
 
     // ### ROLE:
@@ -37,13 +39,20 @@ export class PromptBuilder {
     // ### CORE_TASK:
     prompt += `${P.CORE_TASK_DESCRIPTION}\n\n`;
 
-    // ### CONTEXT: Conversation History
+    // ### CONTEXT: Conversation History - with PII scrubbing
     prompt += `${P.CONTEXT_SECTION_HEADER_HISTORY}\n`;
     if (conversationHistory.length > 0) {
       const recentHistory = conversationHistory.slice(-AI_CONFIG.CHAT_HISTORY_MAX_TURNS * 2);
-      for (const msg of recentHistory) {
+
+      const scrubbedHistory = PIIScrubber.scrubConversationHistory(recentHistory, true);
+
+      for (const msg of scrubbedHistory) {
         const roleLabel = msg.role === 'user' ? 'User' : 'Assistant';
-        prompt += `${roleLabel}: ${msg.content}\n`;
+        if (msg.role === 'user') {
+          prompt += `${roleLabel}: <user_query>${msg.content}</user_query>\n`;
+        } else {
+          prompt += `${roleLabel}: ${msg.content}\n`;
+        }
       }
     } else {
       prompt += 'No previous conversation history for this session.\n';
@@ -53,12 +62,18 @@ export class PromptBuilder {
     // ### CONTEXT: Relevant Information from Knowledge Base
     prompt += `${P.CONTEXT_SECTION_HEADER_KB}\n`;
     if (retrievedContexts.length > 0) {
-      retrievedContexts.forEach((ctx, index) => {
+      const { sanitizedContexts, overallSanitizationLog } =
+        DatabaseSanitizer.sanitizeSwitchContextArray(retrievedContexts);
+
+      if (overallSanitizationLog.length > 0) {
+        DatabaseSanitizer.logSanitization('PROMPT_BUILDER_CONTEXTS', overallSanitizationLog);
+      }
+
+      sanitizedContexts.forEach((ctx, index) => {
         prompt += `Context Item ${index + 1}:\n`;
         prompt += `  Name: ${ctx.name}\n`;
         prompt += `  Manufacturer: ${ctx.manufacturer}\n`;
         prompt += `  Type: ${ctx.type || 'N/A'}\n`;
-        // Include other relevant fields from SwitchContextItem as needed by the prompt strategy
         if (ctx.description_text) {
           prompt += `  Description: ${ctx.description_text}\n`;
         } else {
@@ -76,8 +91,9 @@ export class PromptBuilder {
     }
     prompt += '\n';
 
-    // ### USER_QUERY:
-    prompt += `${P.USER_QUERY_HEADER}\n${userQuery}\n\n`;
+    // ### USER_QUERY: - with PII scrubbing
+    const scrubbedUserQuery = PIIUtils.scrubUserQuery(userQuery);
+    prompt += `${P.USER_QUERY_HEADER}\n<user_query>${scrubbedUserQuery}</user_query>\n\n`;
 
     // ### OUTPUT_FORMAT_INSTRUCTIONS:
     prompt += `### OUTPUT_INSTRUCTIONS (Follow these for your response):\n${P.OUTPUT_FORMAT_INSTRUCTIONS}\n\n`;
@@ -92,7 +108,13 @@ export class PromptBuilder {
     // ### BEHAVIORAL_GUIDELINE_FACTUALNESS:
     prompt += `### BEHAVIORAL_GUIDELINE (Overall approach):\n${P.BEHAVIORAL_GUIDELINE_FACTUALNESS}\n\n`;
 
-    // Final cue for the LLM
+    // ### KNOWLEDGE SCOPING: "Foundation, Not a Fortress" Principle
+    prompt += `### KNOWLEDGE_SCOPING_INSTRUCTION (Foundation, Not a Fortress):\n`;
+    prompt += `When answering, use the provided database context as your primary source of truth. If the context is insufficient, you may use your general knowledge to fill in gaps, but you **must** state when you are doing so. For example, you could say, 'Based on the database, the switch has X characteristic. While not in the database, my general knowledge suggests that switches with these materials often have Y sound profile.'\n\n`;
+
+    // ### FINAL_SECURITY_INSTRUCTION: Critical security directive
+    prompt += `### SECURITY_DIRECTIVE (CRITICAL - NON-NEGOTIABLE):\n${P.FINAL_SECURITY_INSTRUCTION}\n\n`;
+
     prompt += "Assistant's Response:\n";
 
     return prompt;
@@ -101,6 +123,7 @@ export class PromptBuilder {
   /**
    * Build specialized comparison prompt using embedding-based data retrieval
    * Follows the structure from identity.txt but integrates with ComprehensiveSwitchData
+   * Updated to generate structured JSON output with comparisonTable, summary, and recommendations
    */
   static buildComparisonPrompt(
     conversationHistory: Pick<ChatMessage, 'role' | 'content'>[],
@@ -116,18 +139,25 @@ export class PromptBuilder {
     prompt += `You are switch.ai, an expert mechanical keyboard switch analyst. Your knowledge is derived from a dedicated database of switch specifications and supplemented by broad general knowledge of the mechanical keyboard domain.\n\n`;
 
     // ### PRIMARY TASK
-    prompt += `PRIMARY_TASK: GENERATE_SWITCH_COMPARISON\n`;
-    prompt += `Given switch names by the user and their corresponding data from our database (and/or supplemental general knowledge for missing data), generate a comprehensive, structured comparison.\n\n`;
+    prompt += `PRIMARY_TASK: GENERATE_STRUCTURED_SWITCH_COMPARISON\n`;
+    prompt += `Given switch names by the user and their corresponding data from our database (and/or supplemental general knowledge for missing data), generate a comprehensive, structured comparison in JSON format.\n\n`;
 
     // ### INPUT CONTEXT
     prompt += `INPUT_CONTEXT:\n`;
-    prompt += `USER_QUERY: ${userQuery}\n`;
+    const scrubbedUserQuery = PIIUtils.scrubUserQuery(userQuery);
+    prompt += `USER_QUERY: <user_query>${scrubbedUserQuery}</user_query>\n`;
     prompt += `IDENTIFIED_SWITCHES: [${originalSwitchNames.join(', ')}]\n\n`;
 
-    // ### SWITCH DATA BLOCKS (from embedding-based retrieval)
+    // ### SWITCH DATA BLOCKS (from embedding-based retrieval) - Sanitize before including
     prompt += `SWITCH_DATA_BLOCKS:\n`;
     switchDataBlocks.forEach((dataBlock, index) => {
-      prompt += `Switch ${index + 1}:\n${dataBlock}\n`;
+      const sanitizationResult = DatabaseSanitizer.sanitizeString(dataBlock);
+      const piiScrubbedContent = PIIUtils.scrubDatabaseContent(sanitizationResult.sanitizedContent);
+
+      if (sanitizationResult.wasModified) {
+        DatabaseSanitizer.logSanitization('COMPARISON_PROMPT_DATA_BLOCKS', [sanitizationResult]);
+      }
+      prompt += `Switch ${index + 1}:\n${piiScrubbedContent}\n`;
     });
     prompt += '\n';
 
@@ -136,195 +166,133 @@ export class PromptBuilder {
       prompt += `${missingDataInstructions}\n\n`;
     }
 
-    // ### CONVERSATION HISTORY
+    // ### CONVERSATION HISTORY - with PII scrubbing
     prompt += `CONVERSATION_HISTORY: `;
     if (conversationHistory.length > 0) {
       const recentHistory = conversationHistory.slice(-AI_CONFIG.CHAT_HISTORY_MAX_TURNS * 2);
-      for (const msg of recentHistory) {
+
+      const scrubbedHistory = PIIScrubber.scrubConversationHistory(recentHistory, true);
+
+      for (const msg of scrubbedHistory) {
         const roleLabel = msg.role === 'user' ? 'User' : 'Assistant';
-        prompt += `${roleLabel}: ${msg.content}; `;
+        if (msg.role === 'user') {
+          prompt += `${roleLabel}: <user_query>${msg.content}</user_query>; `;
+        } else {
+          prompt += `${roleLabel}: ${msg.content}; `;
+        }
       }
       prompt += '\n\n';
     } else {
       prompt += 'No previous conversation history.\n\n';
     }
 
-    // ### OUTPUT STRUCTURE AND FORMATTING RULES (from identity.txt)
-    prompt += `OUTPUT_STRUCTURE_AND_FORMATTING_RULES:\n`;
-    prompt += `Overall Format: Markdown.\n`;
-    prompt += `Sections (Strict Order - Use H2 for these, e.g., ## Overview):\n\n`;
+    // ### STRUCTURED JSON OUTPUT FORMAT
+    prompt += `CRITICAL: You MUST respond with a valid JSON object in the following structure:\n\n`;
 
-    // ### DETAILED SECTION INSTRUCTIONS (per FR9)
-    prompt += `## Section Instructions (Generate ALL sections in this exact order):\n\n`;
+    prompt += `{\n`;
+    prompt += `  "comparisonTable": {\n`;
+    prompt += `    "headers": ["Switch Name", "Manufacturer", "Type", "Actuation Force", "Bottom-Out Force", "Pre-Travel", "Total Travel", "Top Housing", "Bottom Housing", "Stem", "Spring", "Mount"],\n`;
+    prompt += `    "rows": [\n`;
+    prompt += `      {\n`;
+    prompt += `        "Switch Name": "Switch Name Here",\n`;
+    prompt += `        "Manufacturer": "Manufacturer Here",\n`;
+    prompt += `        "Type": "Linear/Tactile/Clicky or N/A",\n`;
+    prompt += `        "Actuation Force": "45g or N/A",\n`;
+    prompt += `        "Bottom-Out Force": "62g or N/A",\n`;
+    prompt += `        "Pre-Travel": "2.0mm or N/A",\n`;
+    prompt += `        "Total Travel": "4.0mm or N/A",\n`;
+    prompt += `        "Top Housing": "Material or N/A",\n`;
+    prompt += `        "Bottom Housing": "Material or N/A",\n`;
+    prompt += `        "Stem": "Material or N/A",\n`;
+    prompt += `        "Spring": "Type or N/A",\n`;
+    prompt += `        "Mount": "3-pin/5-pin or N/A"\n`;
+    prompt += `      }\n`;
+    prompt += `      // ... additional switch objects for each switch being compared\n`;
+    prompt += `    ]\n`;
+    prompt += `  },\n`;
+    prompt += `  "summary": "A comprehensive summary of the comparison covering key differences, strengths, and characteristics of each switch. Should be 3-5 paragraphs covering: 1) Overview of switches being compared, 2) Key technical differences, 3) Sound and feel characteristics, 4) Overall assessment and positioning",\n`;
+    prompt += `  "recommendations": [\n`;
+    prompt += `    {\n`;
+    prompt += `      "text": "Specific recommendation for a particular use case or user type",\n`;
+    prompt += `      "reasoning": "Detailed explanation of why this recommendation makes sense based on the switch characteristics"\n`;
+    prompt += `    },\n`;
+    prompt += `    {\n`;
+    prompt += `      "text": "Another recommendation for different use case or preference",\n`;
+    prompt += `      "reasoning": "Explanation for this recommendation"\n`;
+    prompt += `    }\n`;
+    prompt += `    // Include 2-4 recommendations total\n`;
+    prompt += `  ]\n`;
+    prompt += `}\n\n`;
 
-    prompt += `### ## Overview Section:\n`;
-    prompt += `- Provide a brief introduction to each switch being compared\n`;
-    prompt += `- Describe their general positioning in the market (budget, premium, enthusiast, etc.)\n`;
-    prompt += `- Highlight notable characteristics that set each switch apart\n`;
-    prompt += `- Keep this section concise (2-4 sentences per switch)\n`;
-    prompt += `- Use bold formatting for switch names throughout\n\n`;
+    // ### DETAILED CONTENT INSTRUCTIONS
+    prompt += `CONTENT GENERATION GUIDELINES:\n\n`;
 
-    prompt += `### ## Technical Specifications Section:\n`;
-    prompt += `- If comparing 2-3 switches: Use a Markdown table format\n`;
-    prompt += `- If comparing 4+ switches: Use bulleted lists under each switch name\n`;
-    prompt += `- REQUIRED table columns/fields (in this order): Switch Name, Manufacturer, Type, Actuation Force, Bottom-Out Force, Pre-Travel, Total Travel, Top Housing, Bottom Housing, Stem, Spring, Mount\n`;
-    prompt += `- For missing data: explicitly state "N/A" or "Data not available for [Switch Name]"\n`;
-    prompt += `- Include units (e.g., "45g", "2.0mm") where applicable\n`;
-    prompt += `- Base ALL specifications strictly on SWITCH_DATA_BLOCKS provided\n\n`;
+    // ### COMPARISON TABLE INSTRUCTIONS
+    prompt += `## Comparison Table Instructions:\n`;
+    prompt += `- Include one row object for each switch being compared\n`;
+    prompt += `- Use the exact header names specified in the JSON structure\n`;
+    prompt += `- For missing data: use "N/A" or "Data not available"\n`;
+    prompt += `- Include units where applicable (e.g., "45g", "2.0mm")\n`;
+    prompt += `- Base ALL specifications strictly on SWITCH_DATA_BLOCKS provided\n`;
+    prompt += `- Do not invent or guess technical specifications\n\n`;
 
-    prompt += `### ## In-Depth Analysis Section (Use H3 subsections):\n`;
-    prompt += `Generate the following H3 subsections in order:\n\n`;
+    // ### SUMMARY INSTRUCTIONS
+    prompt += `## Summary Instructions:\n`;
+    prompt += `- Provide a comprehensive 3-5 paragraph analysis covering:\n`;
+    prompt += `  1. Overview: Brief introduction to each switch and market positioning\n`;
+    prompt += `  2. Technical Differences: Key spec differences and their implications\n`;
+    prompt += `  3. Sound & Feel: Expected sound profile and typing experience for each\n`;
+    prompt += `  4. Use Case Analysis: Suitability for different applications (gaming, typing, office)\n`;
+    prompt += `  5. Overall Assessment: Balanced conclusion highlighting unique strengths\n`;
+    prompt += `- Be analytical and technical while remaining accessible\n`;
+    prompt += `- Explain implications of differences, not just list specifications\n`;
+    prompt += `- Maintain neutral tone without heavily favoring any switch\n\n`;
 
-    prompt += `#### ### Housing Materials:\n`;
-    prompt += `- Analyze top and bottom housing materials for each switch\n`;
-    prompt += `- Explain impact on sound profile (dampening, resonance, pitch)\n`;
-    prompt += `- Discuss impact on feel (scratch, smoothness, tactile feedback)\n`;
-    prompt += `- Compare material combinations between switches\n`;
-    prompt += `- Use technical terms but explain briefly for beginners\n\n`;
+    // ### RECOMMENDATIONS INSTRUCTIONS
+    prompt += `## Recommendations Instructions:\n`;
+    prompt += `- Provide 2-4 practical recommendations\n`;
+    prompt += `- Each recommendation should target different use cases or user preferences:\n`;
+    prompt += `  * Gaming vs typing vs office work\n`;
+    prompt += `  * Sound sensitivity (quiet environments vs personal preference)\n`;
+    prompt += `  * Force preference (light touch vs heavy)\n`;
+    prompt += `  * Experience level (beginner vs enthusiast)\n`;
+    prompt += `- Each reasoning should be specific and reference actual switch characteristics\n`;
+    prompt += `- Make recommendations actionable and practical\n`;
+    prompt += `- Consider user's specific query context when applicable\n\n`;
 
-    prompt += `#### ### Force & Weighting:\n`;
-    prompt += `- Analyze actuation and bottom-out forces for each switch\n`;
-    prompt += `- Explain implications for typing experience (light touch vs heavy)\n`;
-    prompt += `- Discuss potential for typing fatigue during extended use\n`;
-    prompt += `- Compare force curves and typing dynamics between switches\n`;
-    prompt += `- Consider suitability for different hand strengths and preferences\n\n`;
-
-    prompt += `#### ### Travel & Actuation:\n`;
-    prompt += `- Discuss pre-travel and total travel distances\n`;
-    prompt += `- Explain effect on perceived typing speed and responsiveness\n`;
-    prompt += `- Analyze actuation point positioning and feedback timing\n`;
-    prompt += `- Compare how travel distances affect typing rhythm\n`;
-    prompt += `- Consider impact on gaming vs typing performance\n\n`;
-
-    prompt += `#### ### Sound Profile:\n`;
-    prompt += `- Describe expected sound characteristics (clacky, thocky, poppy, muted, etc.)\n`;
-    prompt += `- Be analytical about factors contributing to sound (materials, design, lubrication)\n`;
-    prompt += `- Compare volume levels and frequency ranges between switches\n`;
-    prompt += `- Consider suitability for different environments (office, home, quiet spaces)\n`;
-    prompt += `- If database info is sparse, use general knowledge with proper attribution\n\n`;
-
-    prompt += `#### ### Feel & Tactility/Linearity:\n`;
-    prompt += `- Describe the detailed typing experience for each switch\n`;
-    prompt += `- For tactile switches: analyze bump shape, position, and intensity\n`;
-    prompt += `- For linear switches: discuss smoothness, consistency, and any variations\n`;
-    prompt += `- For clicky switches: describe click mechanism and timing\n`;
-    prompt += `- Compare overall typing sensation and feedback quality\n\n`;
-
-    prompt += `#### ### Use Case Suitability (Optional - include if user query implies specific use):\n`;
-    prompt += `- Discuss suitability for gaming, typing, programming, office work\n`;
-    prompt += `- Consider environmental requirements (quiet, shared spaces)\n`;
-    prompt += `- Analyze performance for different user preferences and hand types\n`;
-    prompt += `- Provide practical recommendations based on intended use\n\n`;
-
-    prompt += `### ## Typing Experience Summary Section:\n`;
-    prompt += `- Provide a concise summary of the overall subjective typing experience for each switch\n`;
-    prompt += `- Focus on the holistic feel rather than individual technical aspects\n`;
-    prompt += `- Use descriptive language that helps users visualize the experience\n`;
-    prompt += `- Keep this section brief but informative (2-3 sentences per switch)\n\n`;
-
-    prompt += `### ## Conclusion Section:\n`;
-    prompt += `- Summarize key differences and overall standing of each switch\n`;
-    prompt += `- Highlight the most significant differentiators between switches\n`;
-    prompt += `- If user query included specific use case, tailor recommendation accordingly\n`;
-    prompt += `- Provide balanced assessment without heavily favoring any switch\n`;
-    prompt += `- End with practical guidance for potential buyers\n\n`;
-
-    // ### MARKDOWN USAGE
-    prompt += `Markdown Usage Requirements:\n`;
-    prompt += `Use bold for switch names (e.g., **Gateron Oil King**).\n`;
-    prompt += `Use bold for key technical terms upon first significant mention.\n`;
-    prompt += `Use bullet points for lists within analytical sections.\n`;
-    prompt += `Use proper H2 (##) for main sections and H3 (###) for subsections.\n`;
-    prompt += `Format tables properly with | separators and header row.\n\n`;
-
-    // ### DETAILED MARKDOWN FORMATTING SPECIFICATIONS (per FR11)
-    prompt += `MANDATORY Markdown Formatting Specifications:\n\n`;
-
-    prompt += `Headers:\n`;
-    prompt += `- Main sections: Use ## (H2) format: "## Overview", "## Technical Specifications", etc.\n`;
-    prompt += `- Subsections in In-Depth Analysis: Use ### (H3) format: "### Housing Materials", "### Sound Profile", etc.\n`;
-    prompt += `- NO H1 (#) headers - start with H2 (##)\n`;
-    prompt += `- Headers must match the exact section names specified above\n\n`;
-
-    prompt += `Text Formatting:\n`;
-    prompt += `- **Bold** ALL switch names throughout the entire response (e.g., **Cherry MX Red**, **Gateron Oil King**)\n`;
-    prompt += `- **Bold** key technical terms on first significant mention (e.g., **actuation force**, **tactile bump**, **pre-travel**)\n`;
-    prompt += `- Use *italics* for emphasis on descriptive qualities (e.g., *smooth*, *scratchy*, *crisp*)\n`;
-    prompt += `- NO underscores for formatting - use asterisks only\n\n`;
-
-    prompt += `Lists and Bullets:\n`;
-    prompt += `- Use standard bullet points (-) for lists within analytical sections\n`;
-    prompt += `- Maintain consistent indentation for sub-bullets\n`;
-    prompt += `- Each bullet point should be a complete thought or comparison\n\n`;
-
-    prompt += `Table Formatting (for Technical Specifications when comparing 2-3 switches):\n`;
-    prompt += `- Use proper Markdown table syntax with | separators\n`;
-    prompt += `- Include header row with alignment: | Switch Name | Manufacturer | Type | etc. |\n`;
-    prompt += `- Follow with separator row: |-------------|--------------|------|-----|\n`;
-    prompt += `- Ensure all data cells are properly aligned\n`;
-    prompt += `- Use "N/A" for missing data, not empty cells\n`;
-    prompt += `- Include units in cells (e.g., "45g", "2.0mm")\n\n`;
-
-    prompt += `Content Structure:\n`;
-    prompt += `- Use blank lines between sections for readability\n`;
-    prompt += `- Start each section immediately with its H2 header\n`;
-    prompt += `- Use concise but informative paragraphs\n`;
-    prompt += `- Avoid excessive whitespace or formatting noise\n\n`;
-
-    // ### CONTENT CONSTRAINTS
-    prompt += `Content Constraints:\n`;
-    prompt += `STRICTLY base technical specifications on SWITCH_DATA_BLOCKS if provided for a switch.\n`;
-    prompt += `If data is N/A or missing from SWITCH_DATA_BLOCKS for a specific field, explicitly state "N/A" or "Data not available for [Switch Name]" for that field in the Technical Specifications section.\n`;
-    prompt += `For analytical sections (Sound, Feel, etc.), if database information is sparse, you MAY use your general knowledge but MUST preface it with "Based on general community understanding..." or "Typically, switches with these characteristics...". If citing external knowledge for a switch not in our DB, state "For [Switch Name not in DB], general information suggests...".\n`;
-    prompt += `DO NOT invent specifications.\n`;
-    prompt += `Maintain a neutral, analytical, yet slightly enthusiastic and expert tone.\n\n`;
-
-    // ### COMPREHENSIVE MISSING DATA HANDLING (per FR5, FR6)
-    prompt += `MISSING DATA HANDLING INSTRUCTIONS (Critical - Follow Exactly):\n\n`;
-
-    prompt += `For Technical Specifications Section:\n`;
-    prompt += `- If a field is missing from SWITCH_DATA_BLOCKS: Use "N/A" or "Data not available for [Switch Name]"\n`;
-    prompt += `- NEVER guess or invent technical specifications\n`;
-    prompt += `- If a switch is entirely missing from our database: State "Not in our database" clearly\n`;
-    prompt += `- Include confidence indicators when available from the data blocks\n\n`;
-
-    prompt += `For Analytical Sections (Sound, Feel, Housing Materials, etc.):\n`;
-    prompt += `When database information is limited, you MAY supplement with general knowledge using these EXACT phrases:\n\n`;
-
-    prompt += `General Knowledge Attribution Templates:\n`;
-    prompt += `- "Based on general community understanding, [statement]..."\n`;
-    prompt += `- "Typically, switches with these characteristics [statement]..."\n`;
-    prompt += `- "According to widely reported user experiences, [statement]..."\n`;
-    prompt += `- "General information suggests that [statement]..."\n`;
-    prompt += `- "Community consensus indicates that [statement]..."\n\n`;
-
-    prompt += `For Switches Not in Database:\n`;
-    prompt += `- Use: "For [Switch Name], not in our database, general information suggests [statement]..."\n`;
-    prompt += `- Always clarify when information comes from general knowledge vs our database\n`;
-    prompt += `- Maintain transparency about data sources throughout\n\n`;
-
-    prompt += `Quality Guidelines for General Knowledge Usage:\n`;
-    prompt += `- Only use well-established, widely-accepted information\n`;
-    prompt += `- Avoid speculative or controversial claims\n`;
-    prompt += `- Focus on material properties and established switch characteristics\n`;
-    prompt += `- When in doubt, state limitations clearly rather than guessing\n\n`;
-
-    prompt += `Confidence and Transparency Requirements:\n`;
+    // ### DATA HANDLING INSTRUCTIONS
+    prompt += `DATA HANDLING REQUIREMENTS:\n`;
+    prompt += `- STRICTLY base technical specifications on SWITCH_DATA_BLOCKS when provided\n`;
+    prompt += `- For analytical content (summary, recommendations), you MAY supplement with general knowledge using clear attribution:\n`;
+    prompt += `  * "Based on general community understanding..."\n`;
+    prompt += `  * "Typically, switches with these characteristics..."\n`;
+    prompt += `  * "According to widely reported user experiences..."\n`;
+    prompt += `- For switches not in database: "Not in our database - based on general information..."\n`;
     prompt += `- Always distinguish between database facts and general knowledge\n`;
-    prompt += `- If mixing sources within a paragraph, clarify each statement's origin\n`;
-    prompt += `- Use phrases like "while our database shows [fact], general understanding suggests [inference]"\n`;
-    prompt += `- Maintain user trust through clear source attribution\n\n`;
+    prompt += `- Use "N/A" for missing technical specifications - never guess\n\n`;
+
+    // ### JSON FORMATTING REQUIREMENTS
+    prompt += `JSON FORMATTING REQUIREMENTS:\n`;
+    prompt += `- Output ONLY valid JSON - no additional text before or after\n`;
+    prompt += `- Use proper JSON escaping for quotes and special characters\n`;
+    prompt += `- Ensure all string values are properly quoted\n`;
+    prompt += `- Do not include comments in the actual JSON output\n`;
+    prompt += `- Validate that your JSON structure matches the specified format exactly\n\n`;
 
     // ### BEHAVIORAL GUIDELINES
     prompt += `BEHAVIORAL_GUIDELINES:\n`;
-    prompt += `Factualness: Highly Factual when data is provided from SWITCH_DATA_BLOCKS. When inferring or using general knowledge due to missing data, clearly indicate this and strive for accuracy based on widely accepted information.\n`;
-    prompt += `Analytical Depth: Provide analysis, not just lists of specs. Explain implications of differences.\n`;
-    prompt += `Clarity for All Users: While focusing on nuanced differences, explain technical terms briefly if they might be new to a beginner.\n`;
-    prompt += `Completeness: Aim to cover all requested sections in the output.\n`;
-    prompt += `No Conversational Fluff: Directly generate the structured comparison.\n\n`;
+    prompt += `- Factualness: Highly factual for technical specs, clearly attributed general knowledge for analysis\n`;
+    prompt += `- Analytical Depth: Provide analysis and implications, not just raw data\n`;
+    prompt += `- Clarity: Explain technical terms briefly while maintaining expert accuracy\n`;
+    prompt += `- Completeness: Include all required JSON fields with meaningful content\n`;
+    prompt += `- Objectivity: Maintain neutral analysis without bias toward any switch\n\n`;
+
+    // ### FINAL_SECURITY_INSTRUCTION: Critical security directive
+    const P = AI_CONFIG.PROMPT_COMPONENTS;
+    prompt += `### SECURITY_DIRECTIVE (CRITICAL - NON-NEGOTIABLE):\n${P.FINAL_SECURITY_INSTRUCTION}\n\n`;
 
     // Final instruction
-    prompt += `Generate the structured comparison now:\n`;
+    prompt += `Generate the structured JSON comparison now (JSON only, no additional text):\n`;
 
     return prompt;
   }

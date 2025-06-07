@@ -1,20 +1,13 @@
 /**
  * Prompt Templates Utility for SwitchAI Response Quality Enhancement
  *
- * Following intentMapping.ts success patterns:
- * - Single source of truth for template management
- * - Deterministic template selection
- * - Comprehensive input handling with fallbacks
- * - Clear type safety with TypeScript interfaces
- *
  * Purpose: Enforce consistent markdown structure output to resolve
- * JSON vs markdown format mismatch (primary root cause of test failures)
+ * JSON vs markdown format mismatch
  */
 
 import { QueryIntent } from '../types/analysisTypes.js';
 import { validateIntent } from './intentMapping.js';
 
-// Template configuration types
 export interface TemplateOptions {
   format: 'markdown';
   detailLevel?: 'brief' | 'moderate' | 'detailed';
@@ -44,7 +37,6 @@ export interface PromptContext {
  * Following intentMapping's deterministic pattern
  */
 export function getPromptTemplate(intent: QueryIntent, options: TemplateOptions): PromptTemplate {
-  // Normalize intent using existing success pattern
   const normalizedIntent = validateIntent(intent);
 
   switch (normalizedIntent) {
@@ -63,7 +55,6 @@ export function getPromptTemplate(intent: QueryIntent, options: TemplateOptions)
 
 /**
  * Build complete markdown-enforcing prompt
- * Main entry point following intentMapping usage patterns
  */
 export function buildMarkdownPrompt(intent: QueryIntent, context: PromptContext): string {
   const template = getPromptTemplate(intent, context.options);
@@ -72,7 +63,6 @@ export function buildMarkdownPrompt(intent: QueryIntent, context: PromptContext)
 
 /**
  * Get required markdown sections for an intent type
- * Following intentMapping's mapping pattern
  */
 export function getRequiredSections(intent: QueryIntent): string[] {
   const normalizedIntent = validateIntent(intent);
@@ -116,7 +106,7 @@ class ComparisonTemplate {
     };
   }
 
-  private static getInstructions(options: TemplateOptions): string {
+  private static getInstructions(_options: TemplateOptions): string {
     return `
 MANDATORY OUTPUT FORMAT: Valid markdown with the following EXACT structure:
 
@@ -156,14 +146,14 @@ FORMATTING REQUIREMENTS:
 `;
   }
 
-  private static buildPrompt(context: PromptContext, options: TemplateOptions): string {
-    const baseInstructions = this.getInstructions(options);
+  private static buildPrompt(context: PromptContext, _options: TemplateOptions): string {
+    const baseInstructions = this.getInstructions(_options);
 
     return `You are a knowledgeable keyboard switch expert providing detailed analysis.
 
 ${context.databaseContext ? 'DATABASE CONTEXT:\n' + JSON.stringify(context.databaseContext, null, 2) + '\n\n' : ''}
 
-USER QUERY: ${context.query}
+USER QUERY: <user_query>${context.query}</user_query>
 
 ${baseInstructions}
 
@@ -186,7 +176,7 @@ class GeneralInfoTemplate {
     };
   }
 
-  private static getInstructions(options: TemplateOptions): string {
+  private static getInstructions(_options: TemplateOptions): string {
     return `
 MANDATORY OUTPUT FORMAT: Valid markdown with the following EXACT structure:
 
@@ -223,14 +213,14 @@ FORMATTING REQUIREMENTS:
 `;
   }
 
-  private static buildPrompt(context: PromptContext, options: TemplateOptions): string {
-    const baseInstructions = this.getInstructions(options);
+  private static buildPrompt(context: PromptContext, _options: TemplateOptions): string {
+    const baseInstructions = this.getInstructions(_options);
 
     return `You are a knowledgeable keyboard switch expert providing detailed analysis.
 
 ${context.databaseContext ? 'DATABASE CONTEXT:\n' + JSON.stringify(context.databaseContext, null, 2) + '\n\n' : ''}
 
-USER QUERY: ${context.query}
+USER QUERY: <user_query>${context.query}</user_query>
 
 ${baseInstructions}
 
@@ -253,7 +243,7 @@ class MaterialAnalysisTemplate {
     };
   }
 
-  private static getInstructions(options: TemplateOptions): string {
+  private static getInstructions(_options: TemplateOptions): string {
     return `
 MANDATORY OUTPUT FORMAT: Valid markdown with the following EXACT structure:
 
@@ -281,14 +271,14 @@ FORMATTING REQUIREMENTS:
 `;
   }
 
-  private static buildPrompt(context: PromptContext, options: TemplateOptions): string {
-    const baseInstructions = this.getInstructions(options);
+  private static buildPrompt(context: PromptContext, _options: TemplateOptions): string {
+    const baseInstructions = this.getInstructions(_options);
 
     return `You are a knowledgeable materials expert specializing in keyboard switch components.
 
 ${context.databaseContext ? 'DATABASE CONTEXT:\n' + JSON.stringify(context.databaseContext, null, 2) + '\n\n' : ''}
 
-USER QUERY: ${context.query}
+USER QUERY: <user_query>${context.query}</user_query>
 
 ${baseInstructions}
 
@@ -311,7 +301,7 @@ class FollowUpTemplate {
     };
   }
 
-  private static getInstructions(options: TemplateOptions): string {
+  private static getInstructions(_options: TemplateOptions): string {
     return `
 MANDATORY OUTPUT FORMAT: Valid markdown with the following EXACT structure:
 
@@ -334,15 +324,15 @@ FORMATTING REQUIREMENTS:
 `;
   }
 
-  private static buildPrompt(context: PromptContext, options: TemplateOptions): string {
-    const baseInstructions = this.getInstructions(options);
+  private static buildPrompt(context: PromptContext, _options: TemplateOptions): string {
+    const baseInstructions = this.getInstructions(_options);
 
     return `You are a knowledgeable keyboard switch expert continuing a conversation.
 
 ${context.followUpContext ? 'PREVIOUS CONTEXT:\n' + JSON.stringify(context.followUpContext, null, 2) + '\n\n' : ''}
 ${context.databaseContext ? 'DATABASE CONTEXT:\n' + JSON.stringify(context.databaseContext, null, 2) + '\n\n' : ''}
 
-USER QUERY: ${context.query}
+USER QUERY: <user_query>${context.query}</user_query>
 
 ${baseInstructions}
 
@@ -352,7 +342,6 @@ Provide contextual analysis following the EXACT markdown structure above.`;
 
 /**
  * Default Template for unknown or edge case intents
- * Following intentMapping's safe fallback pattern
  */
 class DefaultTemplate {
   static build(options: TemplateOptions): PromptTemplate {
@@ -365,7 +354,7 @@ class DefaultTemplate {
     };
   }
 
-  private static getInstructions(options: TemplateOptions): string {
+  private static getInstructions(_options: TemplateOptions): string {
     return `
 MANDATORY OUTPUT FORMAT: Valid markdown with the following structure:
 
@@ -380,12 +369,12 @@ FORMATTING REQUIREMENTS:
 `;
   }
 
-  private static buildPrompt(context: PromptContext, options: TemplateOptions): string {
-    const baseInstructions = this.getInstructions(options);
+  private static buildPrompt(context: PromptContext, _options: TemplateOptions): string {
+    const baseInstructions = this.getInstructions(_options);
 
     return `You are a knowledgeable keyboard switch expert providing helpful guidance.
 
-USER QUERY: ${context.query}
+USER QUERY: <user_query>${context.query}</user_query>
 
 ${baseInstructions}
 
@@ -395,7 +384,6 @@ Provide a helpful response following the markdown structure above.`;
 
 /**
  * Edge Case Templates for specific error scenarios
- * Following intentMapping's comprehensive fallback pattern
  */
 export function getEdgeCaseTemplate(errorType: EdgeCaseType, context: any): PromptTemplate {
   switch (errorType) {
@@ -413,7 +401,7 @@ export function getEdgeCaseTemplate(errorType: EdgeCaseType, context: any): Prom
 export type EdgeCaseType = 'vague_query' | 'unknown_switch' | 'mixed_validity';
 
 class VagueQueryTemplate {
-  static build(context: any): PromptTemplate {
+  static build(_context: any): PromptTemplate {
     return {
       intent: 'unknown',
       format: 'markdown',
@@ -434,9 +422,9 @@ MANDATORY OUTPUT FORMAT: Valid markdown with helpful guidance:
 `,
       build: (
         promptContext: PromptContext
-      ) => `You are a helpful keyboard switch expert guiding a user toward a more specific query.
+      ) => `You are switch.ai, a helpful keyboard switch expert guiding a user toward a more specific query.
 
-USER QUERY: ${promptContext.query}
+USER QUERY: <user_query>${promptContext.query}</user_query>
 
 The query needs clarification to provide the most helpful response. Follow the EXACT markdown structure above to guide the user.`
     };
@@ -444,7 +432,7 @@ The query needs clarification to provide the most helpful response. Follow the E
 }
 
 class UnknownSwitchTemplate {
-  static build(context: any): PromptTemplate {
+  static build(_context: any): PromptTemplate {
     return {
       intent: 'unknown',
       format: 'markdown',
@@ -465,17 +453,17 @@ MANDATORY OUTPUT FORMAT: Valid markdown with helpful alternatives:
 `,
       build: (
         promptContext: PromptContext
-      ) => `You are a helpful keyboard switch expert dealing with an unknown switch request.
+      ) => `You are a helpful keyboard switch expert assisting with a query about switches that may not be in the database.
 
-USER QUERY: ${promptContext.query}
+USER QUERY: <user_query>${promptContext.query}</user_query>
 
-The specific switch wasn't found in available information. Follow the EXACT markdown structure above to provide helpful alternatives.`
+Provide helpful guidance following the EXACT markdown structure above.`
     };
   }
 }
 
 class MixedValidityTemplate {
-  static build(context: any): PromptTemplate {
+  static build(_context: any): PromptTemplate {
     return {
       intent: 'unknown',
       format: 'markdown',
@@ -494,11 +482,11 @@ MANDATORY OUTPUT FORMAT: Valid markdown processing partial information:
 `,
       build: (
         promptContext: PromptContext
-      ) => `You are a helpful keyboard switch expert processing a partially valid query.
+      ) => `You are a helpful keyboard switch expert handling a mixed query with both valid and invalid switch names.
 
-USER QUERY: ${promptContext.query}
+USER QUERY: <user_query>${promptContext.query}</user_query>
 
-Some information is available while other parts are unclear. Follow the EXACT markdown structure above to provide what's available and guide on missing parts.`
+Address both valid and invalid elements following the EXACT markdown structure above.`
     };
   }
 }
@@ -509,21 +497,19 @@ Some information is available while other parts are unclear. Follow the EXACT ma
 
 /**
  * Validate template configuration
- * Following intentMapping's validation pattern
  */
-export function validateTemplateOptions(options: TemplateOptions): TemplateOptions {
+export function validateTemplateOptions(_options: TemplateOptions): TemplateOptions {
   return {
     format: 'markdown',
-    detailLevel: options.detailLevel || 'moderate',
-    includeTables: options.includeTables !== false,
-    includeRecommendations: options.includeRecommendations !== false,
-    maxSwitchesInComparison: options.maxSwitchesInComparison || 4
+    detailLevel: _options.detailLevel || 'moderate',
+    includeTables: _options.includeTables !== false,
+    includeRecommendations: _options.includeRecommendations !== false,
+    maxSwitchesInComparison: _options.maxSwitchesInComparison || 4
   };
 }
 
 /**
  * Get human-readable template description
- * Following intentMapping's getPromptType pattern
  */
 export function getTemplateDescription(intent: QueryIntent): string {
   const normalizedIntent = validateIntent(intent);
@@ -544,14 +530,13 @@ export function getTemplateDescription(intent: QueryIntent): string {
 
 /**
  * Debug function to check template selection
- * Following intentMapping's transparent logic pattern
  */
-export function debugTemplateSelection(intent: string, options: TemplateOptions): any {
+export function debugTemplateSelection(intent: string, _options: TemplateOptions): any {
   return {
     originalIntent: intent,
     normalizedIntent: validateIntent(intent),
     selectedTemplate: getTemplateDescription(validateIntent(intent)),
-    options: validateTemplateOptions(options),
+    options: validateTemplateOptions(_options),
     requiredSections: getRequiredSections(validateIntent(intent))
   };
 }

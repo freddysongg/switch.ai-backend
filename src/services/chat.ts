@@ -8,9 +8,13 @@ import {
   switches as switchesTable
 } from '../db/schema.js';
 import { ChatRequest, ChatResponse, ChatMessage as UIChatMessage } from '../types/chat.js';
+import { DatabaseSanitizer } from '../utils/databaseSanitizer.js';
+import { fuseResults } from '../utils/hybridSearch.js';
+import { DatabaseService } from './databaseService.js';
 import { LocalEmbeddingService } from './embeddingsLocal.js';
 import { GeminiService } from './gemini.js';
 import { PromptBuilder } from './promptBuilder.js';
+import { RerankService } from './rerankService.js';
 
 interface SwitchContextForPrompt {
   [key: string]: unknown;
@@ -54,8 +58,8 @@ interface ComprehensiveSwitchData {
   totalTravel: number | null;
   isFound: boolean;
   missingFields: string[];
-  matchConfidence?: number; // Embedding similarity score
-  originalQuery: string; // What the user actually typed
+  matchConfidence?: number;
+  originalQuery: string;
 }
 
 interface ComparisonDataRetrievalResult {
@@ -66,10 +70,55 @@ interface ComparisonDataRetrievalResult {
   retrievalNotes: string[];
 }
 
-const embeddingService = new LocalEmbeddingService();
-const geminiService = new GeminiService();
+const RRF_K = 60;
+const TOP_N = 3;
 
 export class ChatService {
+  private embeddingService: LocalEmbeddingService | null = null;
+  private geminiService: GeminiService | null = null;
+  private databaseService: DatabaseService | null = null;
+  private rerankService: RerankService | null = null;
+
+  /**
+   * Get or create the embedding service (lazy initialization)
+   */
+  private getEmbeddingService(): LocalEmbeddingService {
+    if (!this.embeddingService) {
+      this.embeddingService = new LocalEmbeddingService();
+    }
+    return this.embeddingService;
+  }
+
+  /**
+   * Get or create the Gemini service (lazy initialization)
+   */
+  private getGeminiService(): GeminiService {
+    if (!this.geminiService) {
+      this.geminiService = new GeminiService();
+    }
+    return this.geminiService;
+  }
+
+  /**
+   * Get or create the database service (lazy initialization)
+   */
+  private getDatabaseService(): DatabaseService {
+    if (!this.databaseService) {
+      this.databaseService = new DatabaseService();
+    }
+    return this.databaseService;
+  }
+
+  /**
+   * Get or create the rerank service (lazy initialization)
+   */
+  private getRerankService(): RerankService {
+    if (!this.rerankService) {
+      this.rerankService = new RerankService();
+    }
+    return this.rerankService;
+  }
+
   private truncateText(text: string, max: number): string {
     if (text.length <= max) return text;
     const cut = text.slice(0, max);
@@ -77,7 +126,6 @@ export class ChatService {
     return (lastSpaceIndex > 0 ? cut.slice(0, lastSpaceIndex) : cut) + '...';
   }
 
-  // Fetches history messages formatted for the prompt builder
   private async getConversationHistoryForPrompt(
     conversationId: string
   ): Promise<Pick<UIChatMessage, 'role' | 'content'>[]> {
@@ -138,7 +186,6 @@ export class ChatService {
           'Embedding service failed during switch name extraction, falling back to pattern-only extraction:',
           embeddingError
         );
-        // Fallback to pattern-only extraction without database validation
         extractedSwitchNames = await this.extractPotentialSwitchNames(userQuery);
       }
 
@@ -150,11 +197,9 @@ export class ChatService {
         /difference\s+between\s+(\w[\w\s-]*?)\s+and\s+(\w[\w\s-]*?)(?:\s|$|\?|\.)/gi
       ];
 
-      let hasDirectPattern = false;
       for (const pattern of vsPatterns) {
         const matches = [...query.matchAll(pattern)];
         if (matches.length > 0) {
-          hasDirectPattern = true;
           confidence += 0.3;
           break;
         }
@@ -169,21 +214,17 @@ export class ChatService {
           'Database validation failed during switch name validation, using extracted names as-is:',
           validationError
         );
-        // Use extracted names without validation if database is unavailable
         validatedSwitches = extractedSwitchNames;
-        // Reduce confidence since we couldn't validate
         confidence = confidence * 0.8;
       }
 
-      // Boost confidence if we found valid switches
       if (validatedSwitches.length >= 2) {
         confidence += 0.3;
       } else if (validatedSwitches.length === 1 && hasComparisonKeyword) {
-        confidence += 0.1; // Maybe they mentioned one switch and want to compare with others
+        confidence += 0.1;
       }
 
       // Step 5: Additional heuristics
-      // Check for multiple switch manufacturers mentioned
       const manufacturers = [
         'gateron',
         'cherry',
@@ -199,14 +240,13 @@ export class ChatService {
         confidence += 0.1;
       }
 
-      // Check for multiple switch types mentioned
       const switchTypes = ['linear', 'tactile', 'clicky', 'silent'];
       const mentionedTypes = switchTypes.filter((type) => query.includes(type));
       if (mentionedTypes.length >= 2) {
         confidence += 0.1;
       }
 
-      const isComparison = confidence >= 0.5; // Threshold for considering it a comparison
+      const isComparison = confidence >= 0.5;
 
       return {
         isComparison,
@@ -216,13 +256,12 @@ export class ChatService {
       };
     } catch (criticalError) {
       console.error('Critical error in detectComparisonIntent:', criticalError);
-      // Fallback to basic keyword detection only
       const comparisonKeywords = ['vs', 'versus', 'compare', 'comparison', 'difference', 'better'];
       const hasKeyword = comparisonKeywords.some((keyword) => query.includes(keyword));
 
       return {
         isComparison: hasKeyword,
-        confidence: hasKeyword ? 0.3 : 0, // Lower confidence due to error
+        confidence: hasKeyword ? 0.3 : 0,
         extractedSwitchNames: [],
         originalQuery: userQuery
       };
@@ -235,13 +274,9 @@ export class ChatService {
   private async extractPotentialSwitchNames(query: string): Promise<string[]> {
     const potential: string[] = [];
 
-    // Common switch name patterns (Brand + Name/Type)
     const switchPatterns = [
-      // Brand + descriptive name patterns
       /(?:gateron|cherry|kailh|akko|jwk|novelkeys|zeal|holy)\s+[\w\s-]+/gi,
-      // Color-based switch names
       /(?:red|blue|brown|black|green|yellow|white|silver|gold|pink|purple|orange)\s*(?:switch|switches)?/gi,
-      // Common specific switch names
       /(?:cream|ink|oil\s*king|banana\s*split|alpaca|tangerine|lavender|silent|tactile|linear|clicky)/gi
     ];
 
@@ -255,7 +290,7 @@ export class ChatService {
       }
     }
 
-    return [...new Set(potential)]; // Remove duplicates
+    return [...new Set(potential)];
   }
 
   /**
@@ -400,7 +435,6 @@ export class ChatService {
         .map((item) => item.trim())
         .filter((item) => item.length > 2)
         .filter((item) => {
-          // Filter items that look like switch names
           const switchIndicators = [
             'switch',
             'linear',
@@ -414,19 +448,18 @@ export class ChatService {
           return (
             switchIndicators.some((indicator) => item.includes(indicator)) ||
             /^[a-z\s-]+$/.test(item)
-          ); // Simple alphabetic check
+          );
         });
 
       extractedNames.push(...listItems);
     }
 
-    // Clean and deduplicate extracted names
     const cleanedNames = extractedNames
       .map((name) => name.trim())
       .filter((name) => name.length > 2)
       .filter((name) => !['switch', 'switches', 'linear', 'tactile', 'clicky'].includes(name))
-      .map((name) => name.replace(/\s*switches?\s*$/i, '')) // Remove trailing "switch/switches"
-      .filter((name, index, array) => array.indexOf(name) === index); // Remove duplicates
+      .map((name) => name.replace(/\s*switches?\s*$/i, ''))
+      .filter((name, index, array) => array.indexOf(name) === index);
 
     return cleanedNames;
   }
@@ -443,7 +476,6 @@ export class ChatService {
       const cleanName = name.trim();
       if (cleanName.length < 2) continue;
 
-      // Query database for fuzzy match
       const results = await db
         .select({ name: switchesTable.name })
         .from(switchesTable)
@@ -455,7 +487,7 @@ export class ChatService {
       }
     }
 
-    return [...new Set(validated)]; // Remove duplicates
+    return [...new Set(validated)];
   }
 
   /**
@@ -491,7 +523,6 @@ export class ChatService {
         .limit(3);
 
       if (results.length > 0) {
-        // Find the best match (shortest match is usually most relevant)
         const bestMatch = results.reduce((best, current) =>
           current.name.length < best.name.length ? current : best
         );
@@ -544,7 +575,6 @@ export class ChatService {
               .limit(5);
 
             if (results.length > 0) {
-              // Find the result that best matches the original query
               const bestMatch =
                 results.find((result) => {
                   const resultLower = result.name.toLowerCase();
@@ -560,7 +590,7 @@ export class ChatService {
       }
     }
 
-    return [...new Set(validated)]; // Remove duplicates
+    return [...new Set(validated)];
   }
 
   /**
@@ -619,14 +649,13 @@ export class ChatService {
       return {
         isValidComparison: true,
         switchesToCompare: filteredSwitches,
-        confidence: confidence * 0.9, // Slightly reduce confidence due to filtering
+        confidence: confidence * 0.9,
         originalQuery,
         userFeedbackMessage: `I found ${switchCount} switches in your query (${extractedSwitchNames.join(', ')}). For the best comparison experience, I'll focus on the most relevant ${filteredSwitches.length}: ${filteredSwitches.join(', ')}. If you'd prefer a different selection, please let me know!`,
         processingNote: `Filtered from ${switchCount} to ${filteredSwitches.length} switches for optimal comparison`
       };
     }
 
-    // Fallback case (shouldn't reach here, but safety net)
     return {
       isValidComparison: false,
       switchesToCompare: extractedSwitchNames,
@@ -645,7 +674,7 @@ export class ChatService {
     allSwitches: string[],
     originalQuery: string
   ): Promise<string[]> {
-    const targetCount = 3; // Always aim for 3 switches when filtering down
+    const targetCount = 3;
 
     if (allSwitches.length <= targetCount) {
       return allSwitches;
@@ -661,7 +690,7 @@ export class ChatService {
         // Factor 1: Position in query (earlier mentioned = higher priority)
         const position = lowerQuery.indexOf(lowerSwitch);
         if (position !== -1) {
-          score += (1000 - position) / 10; // Earlier = higher score
+          score += (1000 - position) / 10;
         }
 
         // Factor 2: Explicit mention context (vs, compare, etc.)
@@ -685,7 +714,6 @@ export class ChatService {
           .limit(1);
 
         if (switchData.length > 0) {
-          // Bonus for having different types (linear, tactile, clicky)
           score += 10;
         }
 
@@ -723,11 +751,9 @@ export class ChatService {
     const selected: string[] = [];
     const sortedSwitches = scoredSwitches.sort((a, b) => b.score - a.score);
 
-    // First, try to get one from each type if available
     const typeOrder = ['linear', 'tactile', 'clicky'] as const;
     for (const type of typeOrder) {
       if (typeGroups[type].length > 0 && selected.length < targetCount) {
-        // Get the highest scoring switch of this type
         const bestOfType = sortedSwitches.find(
           (s) => typeGroups[type].includes(s.switchName) && !selected.includes(s.switchName)
         );
@@ -737,7 +763,6 @@ export class ChatService {
       }
     }
 
-    // Fill remaining slots with highest scoring switches
     for (const { switchName } of sortedSwitches) {
       if (selected.length >= targetCount) break;
       if (!selected.includes(switchName)) {
@@ -773,7 +798,6 @@ export class ChatService {
     const missingSwitches: string[] = [];
     const retrievalNotes: string[] = [];
 
-    // Check for empty input
     if (switchNames.length === 0) {
       return {
         switchesData: [],
@@ -795,10 +819,9 @@ export class ChatService {
         // Strategy 1: Try embedding-based matching if service is available
         if (embeddingServiceAvailable) {
           try {
-            const switchEmbedding = await embeddingService.embedText(switchName);
+            const switchEmbedding = await this.getEmbeddingService().embedText(switchName);
             const switchEmbeddingSql = arrayToVector(switchEmbedding);
 
-            // Find the best matching switch using embedding similarity
             matchResults = await db.execute<{
               name: string;
               manufacturer: string;
@@ -842,7 +865,6 @@ export class ChatService {
               embeddingError
             );
             embeddingServiceAvailable = false;
-            // Continue to fallback strategy below
           }
         }
 
@@ -897,11 +919,9 @@ export class ChatService {
           } catch (dbError) {
             console.error(`Database query failed for switch "${switchName}":`, dbError);
             databaseAvailable = false;
-            // Continue to handle database unavailability below
           }
         }
 
-        // Handle database unavailability
         if (!databaseAvailable || matchResults.length === 0) {
           missingSwitches.push(switchName);
           switchesData.push({
@@ -933,7 +953,6 @@ export class ChatService {
 
         const bestMatch = matchResults[0];
 
-        // Check confidence threshold
         const confidenceThreshold = 0.5;
         if (matchConfidence < confidenceThreshold) {
           missingSwitches.push(switchName);
@@ -961,7 +980,6 @@ export class ChatService {
           continue;
         }
 
-        // Process successful match
         const missingFields: string[] = [];
         const requiredFields = [
           'manufacturer',
@@ -1046,7 +1064,6 @@ export class ChatService {
     const allSwitchesFound = missingSwitches.length === 0;
     const hasDataGaps = switchesData.some((s) => s.missingFields.length > 0);
 
-    // Add system status notes if there were service failures
     if (!embeddingServiceAvailable) {
       retrievalNotes.unshift(
         'Note: Embedding service was unavailable, used direct name matching as fallback'
@@ -1075,14 +1092,13 @@ export class ChatService {
     hasIncompleteData: boolean;
     promptInstructions: string;
   } {
-    const { switchesData, missingSwitches, hasDataGaps, allSwitchesFound } = retrievalResult;
+    const { switchesData, allSwitchesFound, missingSwitches, hasDataGaps } = retrievalResult;
 
-    // Build individual switch data blocks for the prompt
     const switchDataBlocks: string[] = [];
+    const sanitizationLogs: any[] = [];
 
     for (const switchData of switchesData) {
       if (switchData.isFound) {
-        // Format available data for found switches
         let dataBlock = `SWITCH_NAME: ${switchData.name}\n`;
         dataBlock += `MANUFACTURER: ${switchData.manufacturer || 'N/A'}\n`;
         dataBlock += `TYPE: ${switchData.type || 'N/A'}\n`;
@@ -1104,18 +1120,31 @@ export class ChatService {
           dataBlock += `MISSING_FIELDS_NOTE: Data not available for: ${switchData.missingFields.join(', ')}\n`;
         }
 
-        switchDataBlocks.push(dataBlock);
+        const sanitizationResult = DatabaseSanitizer.sanitizeString(dataBlock);
+        if (sanitizationResult.wasModified) {
+          sanitizationLogs.push(sanitizationResult);
+        }
+
+        switchDataBlocks.push(sanitizationResult.sanitizedContent);
       } else {
-        // Handle switches not found in database
-        switchDataBlocks.push(
+        const notFoundBlock =
           `SWITCH_NAME: ${switchData.originalQuery}\n` +
-            `DATABASE_STATUS: Not found in database\n` +
-            `NOTE: This switch was not found in our database. General knowledge may be used if available.\n`
-        );
+          `STATUS: NOT_FOUND_IN_DATABASE\n` +
+          `NOTE: This switch was not found in our database. Use general knowledge for analysis.\n`;
+
+        const sanitizationResult = DatabaseSanitizer.sanitizeString(notFoundBlock);
+        if (sanitizationResult.wasModified) {
+          sanitizationLogs.push(sanitizationResult);
+        }
+
+        switchDataBlocks.push(sanitizationResult.sanitizedContent);
       }
     }
 
-    // Generate missing data summary
+    if (sanitizationLogs.length > 0) {
+      DatabaseSanitizer.logSanitization('CHAT_SERVICE_SWITCH_DATA_BLOCKS', sanitizationLogs);
+    }
+
     let missingDataSummary = '';
     if (missingSwitches.length > 0) {
       missingDataSummary += `Missing switches (not in database): ${missingSwitches.join(', ')}. `;
@@ -1130,7 +1159,6 @@ export class ChatService {
         .join('; ')}. `;
     }
 
-    // Generate prompt instructions for handling missing data
     let promptInstructions = '';
     if (!allSwitchesFound || hasDataGaps) {
       promptInstructions = 'MISSING_SWITCH_DATA_NOTE: ';
@@ -1153,6 +1181,367 @@ export class ChatService {
     };
   }
 
+  /**
+   * Transforms raw user query using LLM to optimize it for semantic search
+   * Part of the LLM-Powered Query Transformation feature
+   */
+  private async transformQuery(rawQuery: string): Promise<string> {
+    const transformationPrompt = `Rewrite the following user query to be optimal for a semantic search system for mechanical keyboard switches. Your goal is to expand concepts, add synonyms, and clarify intent. For example, if the user asks for 'quiet clicky switch', you could transform it to 'A quiet but tactile and clicky mechanical keyboard switch, possibly using a muted click mechanism or a specifically designed silent click switch.' Do not answer the query, only rewrite it.
+
+User Query: <user_query>${rawQuery}</user_query>`;
+
+    try {
+      const transformedQuery = await this.getGeminiService().generate(transformationPrompt);
+      return transformedQuery.trim();
+    } catch (error) {
+      console.warn('Query transformation failed, falling back to original query:', error);
+      return rawQuery;
+    }
+  }
+
+  /**
+   * Standard RAG processing with Hybrid Search (Phase 2 Enhancement)
+   * Combines semantic search and keyword search using Reciprocal Rank Fusion
+   * Returns both the assistant text and switch information with re-ranking scores
+   */
+  private async processStandardRAG(
+    rawUserQuery: string,
+    currentConversationId: string
+  ): Promise<{
+    assistantText: string;
+    switchesWithRelevance: Array<{
+      name: string;
+      manufacturer: string;
+      type: string | null;
+      relevance_score?: number;
+      justification?: string;
+    }>;
+  }> {
+    try {
+      const transformedQuery = await this.transformQuery(rawUserQuery);
+      console.log(`Query transformation: "${rawUserQuery}" → "${transformedQuery}"`);
+
+      const [semanticResults, keywordResults] = await Promise.all([
+        this.performSemanticSearch(transformedQuery),
+        this.getDatabaseService().keywordSearch(rawUserQuery)
+      ]);
+
+      console.log(
+        `Search results: ${semanticResults.length} semantic, ${keywordResults.length} keyword`
+      );
+
+      const fusedResults = fuseResults(semanticResults, keywordResults, RRF_K);
+
+      const topNResults = fusedResults.slice(0, TOP_N);
+
+      console.log(
+        `Hybrid search: ${fusedResults.length} fused results, using top ${topNResults.length}`
+      );
+
+      let rerankedContexts: SwitchContextForPrompt[] = [];
+      let switchesWithRelevance: Array<{
+        name: string;
+        manufacturer: string;
+        type: string | null;
+        relevance_score?: number;
+        justification?: string;
+      }> = [];
+
+      if (topNResults.length > 0) {
+        try {
+          const contextsForReranking = topNResults.map((result) => ({
+            name: result.name,
+            manufacturer: result.manufacturer,
+            type: result.type,
+            spring: result.spring,
+            actuationForce: result.actuationForce,
+            description_text: this.buildSwitchDescription(result),
+            similarity: result.rrfScore
+          }));
+
+          const rerankedItems = await this.getRerankService().rerankContexts(
+            rawUserQuery,
+            contextsForReranking
+          );
+
+          const rerankScoreMap = new Map(rerankedItems.map((item) => [item.item_id, item]));
+
+          const reorderedResults = topNResults
+            .map((result) => {
+              const rerankInfo = rerankScoreMap.get(result.name);
+              return {
+                ...result,
+                llmRelevanceScore: rerankInfo?.relevance_score || result.rrfScore,
+                llmJustification: rerankInfo?.justification
+              };
+            })
+            .sort((a, b) => (b.llmRelevanceScore || 0) - (a.llmRelevanceScore || 0));
+
+          rerankedContexts = reorderedResults.map((result) => ({
+            name: result.name,
+            manufacturer: result.manufacturer,
+            type: result.type,
+            spring: result.spring,
+            actuationForce: result.actuationForce,
+            description_text: this.buildSwitchDescription(result),
+            similarity: result.llmRelevanceScore || result.rrfScore
+          }));
+
+          switchesWithRelevance = reorderedResults.map((result) => ({
+            name: result.name,
+            manufacturer: result.manufacturer,
+            type: result.type,
+            relevance_score: result.llmRelevanceScore,
+            justification: result.llmJustification
+          }));
+
+          console.log(
+            `Re-ranking complete: ${rerankedContexts.length} contexts reordered by LLM relevance`
+          );
+        } catch (rerankError) {
+          console.warn('Re-ranking failed, using original hybrid search order:', rerankError);
+
+          rerankedContexts = topNResults.map((result) => ({
+            name: result.name,
+            manufacturer: result.manufacturer,
+            type: result.type,
+            spring: result.spring,
+            actuationForce: result.actuationForce,
+            description_text: this.buildSwitchDescription(result),
+            similarity: result.rrfScore
+          }));
+
+          switchesWithRelevance = topNResults.map((result) => ({
+            name: result.name,
+            manufacturer: result.manufacturer,
+            type: result.type,
+            relevance_score: result.rrfScore
+          }));
+        }
+      }
+
+      const switchContextsForPrompt: SwitchContextForPrompt[] = rerankedContexts;
+
+      if (switchContextsForPrompt.length === 0) {
+        try {
+          const fallbackPrompt = AI_CONFIG.GENERAL_KNOWLEDGE_FALLBACK_PROMPT(rawUserQuery);
+          const assistantText = await this.getGeminiService().generate(fallbackPrompt);
+          return {
+            assistantText,
+            switchesWithRelevance: []
+          };
+        } catch (error) {
+          console.warn(
+            'GeminiService failed during General Knowledge Fallback, using hardcoded fallback:',
+            error
+          );
+
+          const randomIndex = Math.floor(
+            Math.random() * AI_CONFIG.HARDCODED_FALLBACK_MESSAGES.length
+          );
+          return {
+            assistantText: AI_CONFIG.HARDCODED_FALLBACK_MESSAGES[randomIndex],
+            switchesWithRelevance: []
+          };
+        }
+      }
+
+      const historyForPrompt = await this.getConversationHistoryForPrompt(currentConversationId);
+
+      const prompt = PromptBuilder.buildPrompt(
+        historyForPrompt,
+        switchContextsForPrompt,
+        rawUserQuery
+      );
+
+      const assistantText = await this.getGeminiService().generate(prompt);
+
+      return {
+        assistantText,
+        switchesWithRelevance
+      };
+    } catch (error) {
+      console.error('Hybrid search failed, falling back to basic semantic search:', error);
+
+      const fallbackResult = await this.fallbackToBasicSemanticSearch(
+        rawUserQuery,
+        currentConversationId
+      );
+      return {
+        assistantText: fallbackResult,
+        switchesWithRelevance: []
+      };
+    }
+  }
+
+  /**
+   * Performs semantic search using embeddings
+   */
+  private async performSemanticSearch(query: string): Promise<any[]> {
+    const queryEmbedding = await this.getEmbeddingService().embedText(query);
+    const queryEmbeddingSql = arrayToVector(queryEmbedding);
+
+    const results = await db.execute<{
+      id: string;
+      name: string;
+      manufacturer: string;
+      type: string | null;
+      topHousing: string | null;
+      bottomHousing: string | null;
+      stem: string | null;
+      mount: string | null;
+      spring: string | null;
+      actuationForce: number | null;
+      bottomForce: number | null;
+      preTravel: number | null;
+      totalTravel: number | null;
+      embedding: any;
+      similarity: number;
+    }>(sql`
+      SELECT 
+        s.id,
+        s.name, 
+        s.manufacturer, 
+        s.type,
+        s.top_housing as "topHousing",
+        s.bottom_housing as "bottomHousing",
+        s.stem,
+        s.mount,
+        s.spring,
+        s.actuation_force as "actuationForce",
+        s.bottom_force as "bottomForce",
+        s.pre_travel as "preTravel",
+        s.total_travel as "totalTravel",
+        s.embedding,
+        1 - ((s.embedding::text)::vector <=> ${queryEmbeddingSql}) AS similarity
+      FROM ${switchesTable} AS s
+      ORDER BY similarity DESC
+      LIMIT ${AI_CONFIG.CONTEXT_RESULTS_COUNT}
+    `);
+
+    return results.filter((r) => r.similarity >= AI_CONFIG.SIMILARITY_THRESHOLD);
+  }
+
+  /**
+   * Builds a description text for a switch result
+   */
+  private buildSwitchDescription(switchData: any): string {
+    return (
+      `${switchData.name} is a ${switchData.type || 'N/A'} switch by ${switchData.manufacturer}. ` +
+      `It has a spring type of ${switchData.spring || 'N/A'} and an actuation force of ${switchData.actuationForce || 'N/A'}g. ` +
+      `Top housing: ${switchData.topHousing || 'N/A'}, Bottom housing: ${switchData.bottomHousing || 'N/A'}, Stem: ${switchData.stem || 'N/A'}.`
+    );
+  }
+
+  /**
+   * Fallback to basic semantic search if hybrid search fails
+   */
+  private async fallbackToBasicSemanticSearch(
+    rawUserQuery: string,
+    currentConversationId: string
+  ): Promise<string> {
+    // Original semantic search logic
+    const queryEmbedding = await this.getEmbeddingService().embedText(rawUserQuery);
+    const queryEmbeddingSql = arrayToVector(queryEmbedding);
+
+    const retrievedRawContexts = await db.execute<
+      SwitchContextForPrompt & { similarity: number }
+    >(sql`
+      SELECT 
+        s.name, 
+        s.manufacturer, 
+        s.type,
+        s.spring,
+        s.actuation_force as "actuationForce",
+        (s.name || ' is a ' || COALESCE(s.type, 'N/A') || ' switch by ' || s.manufacturer || 
+         '. It has a spring type of ' || COALESCE(s.spring, 'N/A') || 
+         ' and an actuation force of ' || COALESCE(CAST(s.actuation_force AS TEXT), 'N/A') || 'g.' ||
+         ' Top housing: ' || COALESCE(s.top_housing, 'N/A') || ', Bottom housing: ' || COALESCE(s.bottom_housing, 'N/A') || ', Stem: ' || COALESCE(s.stem, 'N/A') ||'.'
+        ) as description_text,
+        1 - ((s.embedding::text)::vector <=> ${queryEmbeddingSql}) AS similarity
+      FROM ${switchesTable} AS s
+      ORDER BY similarity DESC
+      LIMIT ${AI_CONFIG.CONTEXT_RESULTS_COUNT}
+    `);
+
+    const switchContextsForPrompt = retrievedRawContexts.filter(
+      (c) => c.similarity != null && c.similarity >= AI_CONFIG.SIMILARITY_THRESHOLD
+    );
+
+    if (switchContextsForPrompt.length === 0) {
+      try {
+        const fallbackPrompt = AI_CONFIG.GENERAL_KNOWLEDGE_FALLBACK_PROMPT(rawUserQuery);
+        return await this.getGeminiService().generate(fallbackPrompt);
+      } catch (error) {
+        console.warn(
+          'GeminiService failed during General Knowledge Fallback, using hardcoded fallback:',
+          error
+        );
+
+        const randomIndex = Math.floor(
+          Math.random() * AI_CONFIG.HARDCODED_FALLBACK_MESSAGES.length
+        );
+        return AI_CONFIG.HARDCODED_FALLBACK_MESSAGES[randomIndex];
+      }
+    }
+
+    const historyForPrompt = await this.getConversationHistoryForPrompt(currentConversationId);
+    const prompt = PromptBuilder.buildPrompt(
+      historyForPrompt,
+      switchContextsForPrompt,
+      rawUserQuery
+    );
+
+    return await this.getGeminiService().generate(prompt);
+  }
+
+  /**
+   * Parse structured JSON response from LLM for comparison queries
+   * Returns both the structured data and a fallback content string
+   */
+  private parseStructuredComparisonResponse(llmResponse: string): {
+    isStructured: boolean;
+    structuredData?: {
+      comparisonTable: Record<string, any>;
+      summary: string;
+      recommendations: Array<{ text: string; reasoning: string }>;
+    };
+    fallbackContent: string;
+  } {
+    try {
+      const parsed = JSON.parse(llmResponse.trim());
+
+      if (
+        parsed.comparisonTable &&
+        parsed.summary &&
+        Array.isArray(parsed.recommendations) &&
+        parsed.recommendations.every((rec: any) => rec.text && rec.reasoning)
+      ) {
+        return {
+          isStructured: true,
+          structuredData: {
+            comparisonTable: parsed.comparisonTable,
+            summary: parsed.summary,
+            recommendations: parsed.recommendations
+          },
+          fallbackContent: parsed.summary || 'Comparison completed successfully.'
+        };
+      }
+
+      console.warn('LLM returned valid JSON but missing required comparison fields');
+      return {
+        isStructured: false,
+        fallbackContent: llmResponse
+      };
+    } catch (e) {
+      console.log('LLM response is not JSON, treating as regular text content', e);
+      return {
+        isStructured: false,
+        fallbackContent: llmResponse
+      };
+    }
+  }
+
   /** Full RAG-powered message processing */
   async processMessage(userId: string, request: ChatRequest): Promise<ChatResponse> {
     const rawUserQuery = this.truncateText(request.message, AI_CONFIG.MAX_OUTPUT_TOKENS * 100);
@@ -1162,7 +1551,7 @@ export class ChatService {
       const comparisonIntent = await this.detectComparisonIntent(rawUserQuery);
 
       // 1) Get or create conversation
-      let conversation = await withDb(async () => {
+      const conversation = await withDb(async () => {
         if (request.conversationId) {
           const [existing] = await db
             .select()
@@ -1200,22 +1589,17 @@ export class ChatService {
         })
         .returning();
 
-      // ROUTE DECISION: Comparison vs Standard RAG
       if (comparisonIntent.isComparison) {
-        // ** COMPARISON FLOW **
         console.log(`Detected comparison intent with confidence: ${comparisonIntent.confidence}`);
 
         try {
-          // Process the comparison request through our complete comparison pipeline
           const comparisonRequest = await this.processComparisonQuery(rawUserQuery);
 
           if (!comparisonRequest.isValidComparison) {
-            // Handle invalid comparison (e.g., insufficient switches, user feedback needed)
             const assistantText =
               comparisonRequest.userFeedbackMessage ||
               "I couldn't identify enough switches for a comparison. Could you please specify which switches you'd like me to compare?";
 
-            // Save assistant response
             const [assistantMsgRecord] = await db
               .insert(messagesTable)
               .values({
@@ -1236,7 +1620,6 @@ export class ChatService {
               })
               .returning();
 
-            // Update conversation timestamp
             await db
               .update(conversations)
               .set({ updatedAt: new Date() })
@@ -1250,7 +1633,6 @@ export class ChatService {
             };
           }
 
-          // Valid comparison - proceed with embedding-based data retrieval
           let retrievalResult: ComparisonDataRetrievalResult;
           try {
             retrievalResult = await this.retrieveComprehensiveSwitchData(
@@ -1295,7 +1677,6 @@ export class ChatService {
             };
           }
 
-          // Check if we have enough data to proceed with comparison
           const foundSwitches = retrievalResult.switchesData.filter((s) => s.isFound);
           if (foundSwitches.length === 0) {
             const assistantText =
@@ -1378,7 +1759,6 @@ export class ChatService {
             };
           }
 
-          // Format the data for the comparison prompt
           let formattedData: any;
           try {
             formattedData = this.formatMissingDataForPrompt(retrievalResult);
@@ -1418,11 +1798,9 @@ export class ChatService {
             };
           }
 
-          // Get conversation history for the comparison prompt
           const historyForPrompt =
             await this.getConversationHistoryForPrompt(currentConversationId);
 
-          // Build the specialized comparison prompt
           let comparisonPrompt: string;
           try {
             comparisonPrompt = PromptBuilder.buildComparisonPrompt(
@@ -1468,10 +1846,8 @@ export class ChatService {
             };
           }
 
-          // Generate comparison using Gemini (GeminiService has its own error handling)
-          const assistantText = await geminiService.generate(comparisonPrompt);
+          const assistantText = await this.getGeminiService().generate(comparisonPrompt);
 
-          // Check if Gemini returned a fallback error message
           if (assistantText === AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM) {
             const enhancedFallback = `I apologize, but I'm having trouble generating the comparison for ${foundSwitches.map((s) => s.name).join(' and ')} right now. This could be due to AI service limitations. Please try again in a moment, or feel free to ask about these switches individually.`;
 
@@ -1508,13 +1884,16 @@ export class ChatService {
             };
           }
 
-          // Save successful assistant response with comprehensive metadata
+          const parsedResponse = this.parseStructuredComparisonResponse(assistantText);
+
+          const responseContent = parsedResponse.fallbackContent;
+
           const [assistantMsgRecord] = await db
             .insert(messagesTable)
             .values({
               conversationId: currentConversationId,
               userId,
-              content: assistantText,
+              content: responseContent,
               role: 'assistant',
               metadata: {
                 model: AI_CONFIG.GEMINI_MODEL,
@@ -1526,25 +1905,50 @@ export class ChatService {
                 missingSwitches: retrievalResult.missingSwitches,
                 hasDataGaps: retrievalResult.hasDataGaps,
                 promptLength: comparisonPrompt.length,
-                retrievalNotes: retrievalResult.retrievalNotes
+                retrievalNotes: retrievalResult.retrievalNotes,
+                isStructuredOutput: parsedResponse.isStructured,
+                ...(parsedResponse.isStructured && {
+                  structuredData: parsedResponse.structuredData
+                })
               },
               createdAt: new Date(),
               timestamp: new Date()
             })
             .returning();
 
-          // Update conversation timestamp
           await db
             .update(conversations)
             .set({ updatedAt: new Date() })
             .where(eq(conversations.id, currentConversationId));
 
-          return {
+          const baseResponse = {
             id: assistantMsgRecord.id,
-            role: 'assistant',
-            content: assistantText,
+            role: 'assistant' as const,
+            content: responseContent,
             metadata: assistantMsgRecord.metadata as Record<string, any>
           };
+
+          const switchesWithRelevance = foundSwitches.map((switchData) => ({
+            name: switchData.name,
+            manufacturer: switchData.manufacturer,
+            type: switchData.type,
+            relevance_score: switchData.matchConfidence
+          }));
+
+          if (parsedResponse.isStructured && parsedResponse.structuredData) {
+            return {
+              ...baseResponse,
+              comparisonTable: parsedResponse.structuredData.comparisonTable,
+              summary: parsedResponse.structuredData.summary,
+              recommendations: parsedResponse.structuredData.recommendations,
+              switches: switchesWithRelevance
+            };
+          } else {
+            return {
+              ...baseResponse,
+              switches: switchesWithRelevance
+            };
+          }
         } catch (comparisonError) {
           console.error('Critical error in comparison flow:', comparisonError);
           const assistantText = AI_CONFIG.FALLBACK_ERROR_MESSAGE_INTERNAL;
@@ -1583,10 +1987,11 @@ export class ChatService {
           };
         }
       } else {
-        // ** STANDARD RAG FLOW **
-        const assistantText = await this.processStandardRAG(rawUserQuery, currentConversationId);
+        const { assistantText, switchesWithRelevance } = await this.processStandardRAG(
+          rawUserQuery,
+          currentConversationId
+        );
 
-        // Save assistant response
         const [assistantMsgRecord] = await db
           .insert(messagesTable)
           .values({
@@ -1596,25 +2001,37 @@ export class ChatService {
             role: 'assistant',
             metadata: {
               model: AI_CONFIG.GEMINI_MODEL,
-              isComparison: false
+              isComparison: false,
+              switchCount: switchesWithRelevance.length,
+              ...(switchesWithRelevance.length > 0 && {
+                switchesWithRelevance: switchesWithRelevance
+              })
             },
             createdAt: new Date(),
             timestamp: new Date()
           })
           .returning();
 
-        // Update conversation timestamp
         await db
           .update(conversations)
           .set({ updatedAt: new Date() })
           .where(eq(conversations.id, currentConversationId));
 
-        return {
+        const baseResponse = {
           id: assistantMsgRecord.id,
-          role: 'assistant',
+          role: 'assistant' as const,
           content: assistantText,
           metadata: assistantMsgRecord.metadata as Record<string, any>
         };
+
+        if (switchesWithRelevance.length > 0) {
+          return {
+            ...baseResponse,
+            switches: switchesWithRelevance
+          };
+        } else {
+          return baseResponse;
+        }
       }
     } catch (error: any) {
       console.error(
@@ -1633,56 +2050,6 @@ export class ChatService {
         metadata: { error: true, details: error.message }
       };
     }
-  }
-
-  /**
-   * Standard RAG processing (extracted from original processMessage)
-   */
-  private async processStandardRAG(
-    rawUserQuery: string,
-    currentConversationId: string
-  ): Promise<string> {
-    // 3) Embed the user query
-    const queryEmbedding = await embeddingService.embedText(rawUserQuery);
-    const queryEmbeddingSql = arrayToVector(queryEmbedding);
-
-    // 4) Retrieve top-K context from switches table
-    const retrievedRawContexts = await db.execute<
-      SwitchContextForPrompt & { similarity: number }
-    >(sql`
-      SELECT 
-        s.name, 
-        s.manufacturer, 
-        s.type,
-        s.spring,
-        s.actuation_force as "actuationForce",
-        (s.name || ' is a ' || COALESCE(s.type, 'N/A') || ' switch by ' || s.manufacturer || 
-         '. It has a spring type of ' || COALESCE(s.spring, 'N/A') || 
-         ' and an actuation force of ' || COALESCE(CAST(s.actuation_force AS TEXT), 'N/A') || 'g.' ||
-         ' Top housing: ' || COALESCE(s.top_housing, 'N/A') || ', Bottom housing: ' || COALESCE(s.bottom_housing, 'N/A') || ', Stem: ' || COALESCE(s.stem, 'N/A') ||'.'
-        ) as description_text,
-        1 - ((s.embedding::text)::vector <=> ${queryEmbeddingSql}) AS similarity
-      FROM ${switchesTable} AS s
-      ORDER BY similarity DESC
-      LIMIT ${AI_CONFIG.CONTEXT_RESULTS_COUNT}
-    `);
-
-    const switchContextsForPrompt = retrievedRawContexts.filter(
-      (c) => c.similarity != null && c.similarity >= AI_CONFIG.SIMILARITY_THRESHOLD
-    );
-
-    // 5) Fetch recent history
-    const historyForPrompt = await this.getConversationHistoryForPrompt(currentConversationId);
-
-    // 6) Build prompt using the new PromptBuilder and structured config
-    const prompt = PromptBuilder.buildPrompt(
-      historyForPrompt,
-      switchContextsForPrompt,
-      rawUserQuery
-    );
-
-    // 7) Call Gemini
-    return await geminiService.generate(prompt);
   }
 
   async getConversation(userId: string, conversationId: string): Promise<UIChatMessage[]> {

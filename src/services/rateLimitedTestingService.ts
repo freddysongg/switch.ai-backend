@@ -194,7 +194,6 @@ export class RateLimitedTestingService {
         });
       }
 
-      // Show progress
       const progress = Math.round(((i + 1) / testSuite.testCases.length) * 100);
       const elapsed = Math.round((new Date().getTime() - startTime.getTime()) / 1000);
       console.log(`   📈 Progress: ${progress}% (${elapsed}s elapsed)`);
@@ -219,19 +218,15 @@ export class RateLimitedTestingService {
    */
   async runTestCase(testCase: TestCase): Promise<TestResult> {
     try {
-      // Wait for rate limit compliance
       await this.waitForRateLimit();
 
-      // Check status
       const status = this.getRateLimitStatus();
       console.log(
         `📊 Rate Status: ${status.requestsInLastMinute}/6 RPM, ${status.requestsToday}/300 RPD`
       );
 
-      // Run the test
       const result = await this.testingService.runTestCase(testCase);
 
-      // Log the request
       this.logRequest('single_test', result.passed);
 
       return result;
@@ -261,7 +256,6 @@ export class RateLimitedTestingService {
       };
     }
 
-    // Calculate quality averages
     const formatComplianceSum = validResults.reduce(
       (sum, r) => sum + (r.evaluationResult?.qualityMetrics.formatComplianceScore || 0),
       0
@@ -275,7 +269,6 @@ export class RateLimitedTestingService {
       0
     );
 
-    // Calculate performance averages
     const responseTimeSum = testResults.reduce((sum, r) => sum + r.executionTime, 0);
     const avgResponseTime = responseTimeSum / testResults.length;
 

@@ -2,20 +2,23 @@ import bcrypt from 'bcrypt';
 import { eq } from 'drizzle-orm';
 import jwt, { Secret, SignOptions } from 'jsonwebtoken';
 
+import { getSecret } from '../config/secrets.js';
 import { AuthError, DatabaseError, ValidationError } from '../db/errors.js';
 import { db } from '../db/index.js';
 import { users } from '../db/schema.js';
 import { JwtPayload, NewUserWithHashedPassword, User } from '../types/user.js';
 
-const JWT_SECRET_KEY: Secret = process.env.JWT_SECRET as Secret;
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
 const SALT_ROUNDS = 10;
 
-if (!JWT_SECRET_KEY) {
-  throw new Error('FATAL ERROR: JWT_SECRET is not defined in environment variables.');
-}
-
 export class AuthService {
+  private getJwtSecret(): Secret {
+    return getSecret('JWT_SECRET') as Secret;
+  }
+
+  private getJwtExpiresIn(): string {
+    return getSecret('JWT_EXPIRES_IN');
+  }
+
   public async registerUser(payload: {
     email: string;
     password?: string;
@@ -72,7 +75,6 @@ export class AuthService {
       throw new ValidationError('Email and password are required for login.');
     }
 
-    // Ensure role is selected from the database
     const [user] = await db
       .select({
         id: users.id,
@@ -102,7 +104,6 @@ export class AuthService {
     };
     const token = this.generateToken(userForToken);
 
-    // Return user details without sensitive/unnecessary fields
     const { hashedPassword: _h, ...userToReturn } = user;
 
     return { token, user: userToReturn };
@@ -110,7 +111,7 @@ export class AuthService {
 
   public generateToken(payload: JwtPayload): string {
     const options: SignOptions = {
-      expiresIn: JWT_EXPIRES_IN as any
+      expiresIn: this.getJwtExpiresIn() as any
     };
     const tokenPayload = {
       id: payload.id,
@@ -118,12 +119,12 @@ export class AuthService {
       role: payload.role,
       name: payload.name
     };
-    return jwt.sign(tokenPayload, JWT_SECRET_KEY, options);
+    return jwt.sign(tokenPayload, this.getJwtSecret(), options);
   }
 
   public verifyToken(token: string): JwtPayload | null {
     try {
-      const decoded = jwt.verify(token, JWT_SECRET_KEY) as JwtPayload;
+      const decoded = jwt.verify(token, this.getJwtSecret()) as JwtPayload;
       return decoded;
     } catch (error) {
       console.warn('JWT verification failed:', error);

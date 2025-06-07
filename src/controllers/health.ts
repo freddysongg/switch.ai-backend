@@ -1,6 +1,8 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Request, Response } from 'express';
 
+import { AI_CONFIG } from '../config/ai.config.js';
+import { getSecret } from '../config/secrets.js';
 import { db, withDb } from '../db/index.js';
 import { health } from '../db/schema.js';
 import { supabase } from '../utils/supabase.js';
@@ -16,13 +18,11 @@ export class HealthController {
     };
 
     try {
-      // Check database
       await withDb(async () => {
         await db.insert(health).values({ status: 'ok' });
         status.database = 'ok';
       });
 
-      // Check auth service
       try {
         await supabase.auth.getSession();
         status.auth = 'ok';
@@ -31,11 +31,19 @@ export class HealthController {
         status.auth = 'error';
       }
 
-      // Check LLM
       try {
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+        const genAI = new GoogleGenerativeAI(getSecret('GEMINI_API_KEY'));
         const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-        await model.generateContent('test');
+
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(
+            () => reject(new Error('LLM health check timed out')),
+            AI_CONFIG.HEALTH_CHECK_TIMEOUT_MS
+          );
+        });
+
+        await Promise.race([model.generateContent('test'), timeoutPromise]);
+
         status.llm = 'ok';
       } catch (error) {
         console.error('LLM health check failed:', error);

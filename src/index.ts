@@ -1,29 +1,86 @@
 import cors from 'cors';
-import * as dotenv from 'dotenv';
 import express from 'express';
 
 import { ASCII_LOGO, SERVER_READY } from './config/ascii.js';
+import { getSecret, initializeSecrets } from './config/secrets.js';
+import { closeDbConnection } from './db/index.js';
+import { addCSPNonce, cspMiddleware, developmentCSP } from './middleware/csp.js';
 import { errorHandler } from './middleware/error.js';
+import { inputSanitization } from './middleware/inputSanitization.js';
+import { rateLimiter } from './middleware/rateLimiter.js';
 import router from './routes/index.js';
 
-dotenv.config({ path: '.env.local' });
+/**
+ * Application startup function
+ */
+async function startServer() {
+  try {
+    console.log(ASCII_LOGO);
+    console.log('🚀 Starting SwitchAI backend server...');
 
-const app = express();
-const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+    await initializeSecrets();
 
-console.log(ASCII_LOGO);
+    const app = express();
+    const port = parseInt(getSecret('PORT'), 10);
+    const nodeEnv = getSecret('NODE_ENV');
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+    console.log(`🌍 Environment: ${nodeEnv}`);
 
-// Routes
-app.use('/api', router);
+    if (nodeEnv === 'development') {
+      app.use(developmentCSP);
+    } else {
+      app.use(cspMiddleware);
+    }
 
-// Error handling
-app.use(errorHandler);
+    app.use(addCSPNonce);
 
-// Start server
-app.listen(port, () => {
-  console.log(SERVER_READY(port));
+    app.use(cors());
+    app.use(express.json());
+    app.use(inputSanitization);
+
+    app.use('/api', rateLimiter, router);
+
+    app.use(errorHandler);
+
+    const server = app.listen(port, () => {
+      console.log(SERVER_READY(port));
+      console.log('✅ Server started successfully with secure configuration');
+    });
+
+    const gracefulShutdown = async (signal: string) => {
+      console.log(`\n📡 Received ${signal}. Starting graceful shutdown...`);
+
+      server.close(async () => {
+        console.log('🔌 HTTP server closed');
+
+        try {
+          await closeDbConnection();
+          console.log('✅ Graceful shutdown completed');
+          process.exit(0);
+        } catch (error) {
+          console.error('❌ Error during graceful shutdown:', error);
+          process.exit(1);
+        }
+      });
+
+      setTimeout(() => {
+        console.error('⚠️ Forced shutdown after timeout');
+        process.exit(1);
+      }, 10000);
+    };
+
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    console.error(
+      '🔧 Please check your environment configuration and ensure all required secrets are properly set.'
+    );
+    process.exit(1);
+  }
+}
+
+startServer().catch((error) => {
+  console.error('💥 Unhandled error during startup:', error);
+  process.exit(1);
 });

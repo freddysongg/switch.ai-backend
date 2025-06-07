@@ -33,7 +33,6 @@ export class AdminRateLimitService {
       .from(rateLimits)
       .where(and(...conditions));
 
-    // Count total records for pagination
     const totalQuery = db
       .select({ count: sql<number>`count(*)` })
       .from(rateLimits)
@@ -41,7 +40,6 @@ export class AdminRateLimitService {
     const totalResult = await totalQuery.execute();
     const total = totalResult[0]?.count || 0;
 
-    // Apply sorting
     const orderByColumn = rateLimits[sortBy as keyof typeof rateLimits.$inferSelect];
     if (orderByColumn) {
       query.orderBy(sortOrder === 'asc' ? asc(orderByColumn) : drizzleDesc(orderByColumn));
@@ -49,7 +47,6 @@ export class AdminRateLimitService {
       query.orderBy(drizzleDesc(rateLimits.createdAt));
     }
 
-    // Apply pagination
     query.limit(limit).offset((page - 1) * limit);
 
     try {

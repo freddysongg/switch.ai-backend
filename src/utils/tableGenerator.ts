@@ -10,14 +10,13 @@
 import { AnalysisResponse } from '../types/analysisTypes.js';
 
 /**
- * ENHANCEMENT 2.7: Generate proper technical specification tables with database integration
+ * Generate proper technical specification tables with database integration
  * Handles database data availability and provides graceful fallbacks for N/A values
  */
 export function generateTechnicalSpecificationsTable(
   response: AnalysisResponse,
   queryType: 'comparison' | 'general_info'
 ): string {
-  // Check if we have database specifications in the response
   const hasDbSpecs =
     response.technicalSpecifications && Object.keys(response.technicalSpecifications).length > 0;
 
@@ -29,13 +28,12 @@ export function generateTechnicalSpecificationsTable(
 }
 
 /**
- * Generate table with actual database specifications
+ * Generate table with database specifications
  */
 export function generateDatabaseIntegratedTable(
   specs: any,
   queryType: 'comparison' | 'general_info'
 ): string {
-  // Define expected headers based on test requirements
   const standardHeaders = ['Property', 'Value'];
   const comparisonHeaders = [
     'Switch',
@@ -56,7 +54,6 @@ export function generateDatabaseIntegratedTable(
  * Check if specifications contain comparison data (multiple switches)
  */
 export function isComparisonData(specs: any): boolean {
-  // Look for multiple switch entries or switch-specific keys
   return (
     Array.isArray(specs) ||
     Object.keys(specs).some((key) => key.includes('switch') || key.includes('Switch')) ||
@@ -72,7 +69,6 @@ export function generateComparisonTable(specs: any, headers: string[]): string {
   table += `| ${headers.map(() => '-------').join(' | ')} |\n`;
 
   if (Array.isArray(specs)) {
-    // Handle array of switch objects
     for (const switchData of specs) {
       const row = headers.map((header) => {
         const value = extractValueForHeader(switchData, header);
@@ -81,7 +77,6 @@ export function generateComparisonTable(specs: any, headers: string[]): string {
       table += `| ${row.join(' | ')} |\n`;
     }
   } else {
-    // Handle object with switch properties
     const switches = extractSwitchesFromSpecs(specs);
     for (const switchName of switches) {
       const row = headers.map((header) => {
@@ -103,7 +98,6 @@ export function generatePropertyValueTable(specs: any, headers: string[]): strin
   let table = `| ${headers.join(' | ')} |\n`;
   table += `| ${headers.map(() => '-------').join(' | ')} |\n`;
 
-  // Map specs to property-value pairs
   const properties = Object.entries(specs);
   for (const [property, value] of properties) {
     const formattedProperty = formatPropertyName(property);
@@ -115,7 +109,7 @@ export function generatePropertyValueTable(specs: any, headers: string[]): strin
 }
 
 /**
- * Generate fallback table when database is empty
+ * Generate fallback table when database is empty (for development purposes)
  */
 export function generateFallbackSpecificationsTable(
   response: AnalysisResponse,
@@ -140,7 +134,7 @@ export function generateFallbackSpecificationsTable(
 }
 
 /**
- * Helper functions for table generation
+ * Helper functions for table generation (for development purposes)
  */
 export function extractValueForHeader(switchData: any, header: string): any {
   const headerMap: { [key: string]: string[] } = {
@@ -163,7 +157,6 @@ export function extractValueForHeader(switchData: any, header: string): any {
 }
 
 export function extractSwitchesFromSpecs(specs: any): string[] {
-  // Extract switch names from various possible structures
   const switches: string[] = [];
 
   for (const [key, value] of Object.entries(specs)) {
@@ -186,7 +179,6 @@ export function extractSwitchProperty(specs: any, switchName: string, property: 
 }
 
 export function formatPropertyName(property: string): string {
-  // Convert camelCase or snake_case to readable format
   return property
     .replace(/([A-Z])/g, ' $1')
     .replace(/_/g, ' ')
@@ -205,11 +197,10 @@ export function formatTableValue(value: any): string {
   }
 
   if (typeof value === 'number') {
-    // Add unit formatting for common measurements
     if (value < 10 && value > 0) {
-      return `${value}mm`; // Likely travel distance
+      return `${value}mm`;
     } else if (value > 10 && value < 200) {
-      return `${value}g`; // Likely actuation force
+      return `${value}g`;
     }
     return value.toString();
   }
