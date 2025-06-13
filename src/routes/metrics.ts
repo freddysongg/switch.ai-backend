@@ -1,6 +1,6 @@
 import { Router } from 'express';
 
-import { MetricsController } from '../controllers/metricsController.js';
+import { MetricsController } from '../controllers/metrics.js';
 
 const router = Router();
 const metricsController = new MetricsController();

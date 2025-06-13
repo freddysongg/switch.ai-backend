@@ -6,9 +6,9 @@ import { rateLimits } from '../db/schema.js';
 
 const LIMITS = {
   authenticated: {
-    requests: 50,
+    requests: 150,
     timeWindow: 3600 * 1000,
-    burstLimit: 5
+    burstLimit: 25
   },
   anonymous: {
     requests: 20,

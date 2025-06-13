@@ -1,4 +1,4 @@
-import { QueryIntent } from '../types/analysisTypes.js';
+import { QueryIntent } from '../types/analysis.js';
 
 /**
  * Shared intent mapping utility to avoid duplicate logic across services

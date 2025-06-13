@@ -16,6 +16,8 @@ interface ApplicationSecrets {
 
   NODE_ENV: string;
   PORT: string;
+
+  RATE_LIMITING_ENABLED: string;
 }
 
 class SecretsManager {
@@ -59,7 +61,9 @@ class SecretsManager {
       GEMINI_API_KEY: this.getRequiredSecret('GEMINI_API_KEY'),
 
       NODE_ENV: this.getOptionalSecret('NODE_ENV') || 'development',
-      PORT: this.getOptionalSecret('PORT') || '3000'
+      PORT: this.getOptionalSecret('PORT') || '3000',
+
+      RATE_LIMITING_ENABLED: this.getOptionalSecret('RATE_LIMITING_ENABLED') || 'true'
     };
   }
 

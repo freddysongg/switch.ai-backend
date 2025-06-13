@@ -14,7 +14,7 @@ import type {
   DatabaseLookupResult,
   DatabaseSwitchData,
   NormalizationResult
-} from '../types/analysisTypes.js';
+} from '../types/analysis.js';
 import { LoggingHelper } from '../utils/loggingHelper.js';
 import { LocalEmbeddingService } from './embeddingsLocal.js';
 import { GeminiService } from './gemini.js';

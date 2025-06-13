@@ -5,7 +5,7 @@
  * while maintaining markdown structure requirements
  */
 
-import { AnalysisResponse, QueryIntent } from '../types/analysisTypes.js';
+import { AnalysisResponse, QueryIntent } from '../types/analysis.js';
 
 export interface ErrorClassification {
   type: ErrorType;

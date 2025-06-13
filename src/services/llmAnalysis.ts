@@ -22,7 +22,7 @@ import type {
   LLMResponse,
   QueryIntent,
   Workflow
-} from '../types/analysisTypes.js';
+} from '../types/analysis.js';
 import { getPromptType, validateIntent } from '../utils/intentMapping.js';
 import { LoggingHelper } from '../utils/loggingHelper.js';
 import { PromptHelper } from '../utils/promptHelper.js';
@@ -38,9 +38,9 @@ import {
   validateMarkdownStructure,
   type ValidationResult
 } from '../utils/responseValidator.js';
-import { DatabaseService } from './databaseService.js';
+import { DatabaseService } from './db.js';
 import { GeminiService } from './gemini.js';
-import { MetricsCollectionService } from './metricsService.js';
+import { MetricsCollectionService } from './metrics.js';
 
 function logStep(step: string, message: string, data?: any): void {
   console.log(`[${step}] ${message}`, data ? JSON.stringify(data, null, 2) : '');

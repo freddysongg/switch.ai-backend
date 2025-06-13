@@ -38,7 +38,12 @@ async function startServer() {
     app.use(express.json());
     app.use(inputSanitization);
 
-    app.use('/api', rateLimiter, router);
+    if (getSecret('RATE_LIMITING_ENABLED') !== 'false') {
+      app.use('/api', rateLimiter, router);
+    } else {
+      console.log('🚨 Rate limiting is disabled via environment variable');
+      app.use('/api', router);
+    }
 
     app.use(errorHandler);
 

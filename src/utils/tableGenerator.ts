@@ -7,7 +7,7 @@
  * Extracted from responseValidator.ts for better code organization
  */
 
-import { AnalysisResponse } from '../types/analysisTypes.js';
+import { AnalysisResponse } from '../types/analysis.js';
 
 /**
  * Generate proper technical specification tables with database integration

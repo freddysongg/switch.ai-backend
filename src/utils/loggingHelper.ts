@@ -14,7 +14,7 @@ import type {
   LLMResponse,
   LogEntry,
   LogLevel
-} from '../types/analysisTypes.js';
+} from '../types/analysis.js';
 
 export class LoggingHelper {
   private static readonly LOG_PREFIX = '[SwitchAnalysis]';

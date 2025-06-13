@@ -52,7 +52,8 @@
 		"audit:critical": "pnpm audit --audit-level=critical",
 		"audit:security": "pnpm audit --audit-level=high --json | node -e 'const audit = JSON.parse(require(\"fs\").readFileSync(0, \"utf8\")); const v = audit.metadata?.vulnerabilities || {}; console.log(\"Critical:\", v.critical || 0, \"High:\", v.high || 0); if ((v.critical || 0) > 0 || (v.high || 0) > 0) process.exit(1);'",
 		"audit:secrets": "node scripts/audit-secrets.js",
-		"audit:secrets:ci": "node scripts/audit-secrets.js --ci"
+		"audit:secrets:ci": "node scripts/audit-secrets.js --ci",
+		"mix": "npx repomix"
 	},
 	"devDependencies": {
 		"@dotenvx/dotenvx": "^1.44.1",

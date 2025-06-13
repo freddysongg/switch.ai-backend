@@ -5,7 +5,7 @@
  * test compliance issues and ensure consistent markdown structure
  */
 
-import { AnalysisResponse, QueryIntent } from '../types/analysisTypes.js';
+import { AnalysisResponse, QueryIntent } from '../types/analysis.js';
 import { validateIntent } from './intentMapping.js';
 import { getRequiredSections } from './promptTemplates.js';
 import { generateTechnicalSpecificationsTable } from './tableGenerator.js';

@@ -14,7 +14,7 @@ import type {
   IntentRecognitionResult,
   LLMPromptContext,
   QueryIntent
-} from '../types/analysisTypes.js';
+} from '../types/analysis.js';
 
 /**
  * Build prompts for various LLM interactions in the switch analysis feature

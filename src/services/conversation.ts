@@ -3,7 +3,7 @@ import { validate as isValidUUID } from 'uuid';
 
 import { AuthError, DatabaseError, ValidationError } from '../db/errors.js';
 import { db } from '../db/index.js';
-import { conversations } from '../db/schema.js';
+import { conversations, messages } from '../db/schema.js';
 import { Conversation, ConversationUpdatePayload, NewConversation } from '../types/conversation.js';
 
 export class ConversationService {
@@ -107,33 +107,141 @@ export class ConversationService {
       throw new ValidationError('Invalid ID format for conversation or user.');
     }
     try {
+      const [existingConversation] = await db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(and(eq(conversations.id, id), eq(conversations.userId, userId)))
+        .limit(1);
+
+      if (!existingConversation) {
+        const [conversationExists] = await db
+          .select({ id: conversations.id })
+          .from(conversations)
+          .where(eq(conversations.id, id))
+          .limit(1);
+
+        if (!conversationExists) {
+          return null;
+        }
+
+        throw new AuthError(
+          'User not authorized to delete this conversation or conversation does not exist for this user.'
+        );
+      }
+
+      await db.delete(messages).where(eq(messages.conversationId, id));
+
       const deletedConversations = await db
         .delete(conversations)
         .where(and(eq(conversations.id, id), eq(conversations.userId, userId)))
         .returning({ id: conversations.id });
 
-      if (deletedConversations.length === 0) {
-        const exists = await db
-          .select({ id: conversations.id })
-          .from(conversations)
-          .where(eq(conversations.id, id))
-          .limit(1);
-        if (exists.length === 0) return null;
-        throw new AuthError(
-          'User not authorized to delete this conversation or conversation does not exist for this user.'
-        );
-      }
-      return deletedConversations[0];
+      return deletedConversations[0] || null;
     } catch (error: any) {
       if (error instanceof AuthError) throw error;
       console.error(`Error deleting conversation ID ${id} for user ID ${userId}:`, error);
+      throw new DatabaseError(`Failed to delete conversation ID ${id}.`, error);
+    }
+  }
+
+  async getOrCreateConversation(
+    userId: string,
+    conversationId?: string,
+    initialQuery?: string
+  ): Promise<Conversation> {
+    if (!isValidUUID(userId)) {
+      throw new ValidationError('Invalid user ID format for getting or creating conversation.');
+    }
+
+    if (conversationId) {
+      if (!isValidUUID(conversationId)) {
+        throw new ValidationError('Invalid conversation ID format.');
+      }
+
+      const existingConversation = await this.getConversationById(conversationId, userId);
+      if (existingConversation) {
+        return existingConversation;
+      }
+      throw new ValidationError(
+        `Conversation with ID ${conversationId} not found or not accessible.`
+      );
+    }
+
+    try {
+      const newConversation: NewConversation = {
+        userId,
+        title: initialQuery || 'New Conversation',
+        category: 'analysis'
+      };
+
+      return await this.createConversation(newConversation, userId);
+    } catch (error: any) {
+      console.error('Error creating new conversation:', error);
+      throw new DatabaseError('Failed to create new conversation.', error);
+    }
+  }
+
+  async addMessage(
+    conversationId: string,
+    userId: string,
+    content: string,
+    role: 'user' | 'assistant',
+    metadata?: Record<string, any>
+  ): Promise<any> {
+    if (!isValidUUID(conversationId) || !isValidUUID(userId)) {
+      throw new ValidationError('Invalid conversation ID or user ID format for adding message.');
+    }
+
+    if (!content || content.trim() === '') {
+      throw new ValidationError('Message content cannot be empty.');
+    }
+
+    try {
+      const [newMessage] = await db
+        .insert(messages)
+        .values({
+          conversationId,
+          userId,
+          content: content.trim(),
+          role,
+          metadata: metadata || {}
+        })
+        .returning();
+
+      if (!newMessage) {
+        throw new DatabaseError('Failed to create message, no record returned.');
+      }
+      return newMessage;
+    } catch (error: any) {
+      console.error('Error adding message:', error);
       if (error.code === '23503') {
-        throw new DatabaseError(
-          `Cannot delete conversation ID ${id} as it is referenced by messages. Please delete associated messages first.`,
-          error
+        throw new ValidationError(
+          `Conversation with ID ${conversationId} or User with ID ${userId} does not exist.`
         );
       }
-      throw new DatabaseError(`Failed to delete conversation ID ${id}.`, error);
+      throw new DatabaseError('Failed to add message.', error);
+    }
+  }
+
+  async getMessages(conversationId: string): Promise<any[]> {
+    if (!isValidUUID(conversationId)) {
+      throw new ValidationError('Invalid conversation ID format for getting messages.');
+    }
+
+    try {
+      const conversationMessages = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.conversationId, conversationId))
+        .orderBy(messages.timestamp);
+
+      return conversationMessages;
+    } catch (error: any) {
+      console.error(`Error fetching messages for conversation ID ${conversationId}:`, error);
+      throw new DatabaseError(
+        `Failed to fetch messages for conversation ID ${conversationId}.`,
+        error
+      );
     }
   }
 }

@@ -52,6 +52,11 @@ export interface AnalysisRequestBody {
   metadata?: Record<string, any>;
 }
 
+export interface ConversationalAnalysisResponse extends AnalysisResponse {
+  conversationId: string;
+  messages: any[];
+}
+
 export type QueryIntent =
   | 'general_switch_info'
   | 'switch_comparison'

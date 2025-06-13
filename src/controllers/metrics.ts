@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 
-import { MetricsCollectionService } from '../services/metricsService.js';
-import { DEFAULT_TEST_SUITES, TestingService } from '../services/testingService.js';
+import { MetricsCollectionService } from '../services/metrics.js';
+import { DEFAULT_TEST_SUITES, TestingService } from '../services/testing.js';
 
 export class MetricsController {
   private testingService: TestingService;
@@ -332,7 +332,7 @@ export class MetricsController {
    */
   async getEvaluationGuidelines(req: Request, res: Response): Promise<void> {
     try {
-      const { MANUAL_EVALUATION_GUIDELINES } = await import('../services/testingService.js');
+      const { MANUAL_EVALUATION_GUIDELINES } = await import('../services/testing.js');
 
       res.json({
         success: true,

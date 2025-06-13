@@ -16,7 +16,7 @@
 
 import express, { NextFunction, Request, Response } from 'express';
 
-import { AnalysisController } from '../controllers/analysisController.js';
+import { AnalysisController } from '../controllers/analysis.js';
 import { analysisRequestSchema, intentRequestSchema, validateBody } from '../schemas/validation.js';
 
 const router = express.Router();

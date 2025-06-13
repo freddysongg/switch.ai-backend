@@ -8,7 +8,7 @@ import {
 
 import { AI_CONFIG } from '../config/ai.config.js';
 import { getSecret } from '../config/secrets.js';
-import type { QueryIntent } from '../types/analysisTypes.js';
+import type { QueryIntent } from '../types/analysis.js';
 import { classifyError, createErrorResponse, logError } from '../utils/errorHandler.js';
 
 export class GeminiService {

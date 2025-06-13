@@ -10,11 +10,11 @@ import {
 import { ChatRequest, ChatResponse, ChatMessage as UIChatMessage } from '../types/chat.js';
 import { DatabaseSanitizer } from '../utils/databaseSanitizer.js';
 import { fuseResults } from '../utils/hybridSearch.js';
-import { DatabaseService } from './databaseService.js';
+import { DatabaseService } from './db.js';
 import { LocalEmbeddingService } from './embeddingsLocal.js';
 import { GeminiService } from './gemini.js';
 import { PromptBuilder } from './promptBuilder.js';
-import { RerankService } from './rerankService.js';
+import { RerankService } from './rerank.js';
 
 interface SwitchContextForPrompt {
   [key: string]: unknown;

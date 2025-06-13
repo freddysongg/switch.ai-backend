@@ -7,15 +7,13 @@
 
 import { Request, Response } from 'express';
 
-import { LLMAnalysisService } from '../services/llmAnalysisService.js';
-import type {
-  AnalysisError,
-  AnalysisRequest,
-  AnalysisRequestBody
-} from '../types/analysisTypes.js';
+import { ConversationService } from '../services/conversation.js';
+import { LLMAnalysisService } from '../services/llmAnalysis.js';
+import type { AnalysisError, AnalysisRequest, AnalysisRequestBody } from '../types/analysis.js';
 import { LoggingHelper } from '../utils/loggingHelper.js';
 
 const llmAnalysisService = new LLMAnalysisService();
+const conversationService = new ConversationService();
 
 export class AnalysisController {
   /**
@@ -37,21 +35,6 @@ export class AnalysisController {
       if (!userId) {
         LoggingHelper.logError(requestId, 'Unauthorized access attempt', 'authentication');
         res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
-
-      const validationResult = this.validateRequestBody(requestBody);
-      if (!validationResult.isValid) {
-        LoggingHelper.logError(
-          requestId,
-          'Invalid request body',
-          'input_validation',
-          validationResult.errors
-        );
-        res.status(400).json({
-          error: 'Invalid request format.',
-          details: validationResult.errors
-        });
         return;
       }
 
@@ -88,6 +71,19 @@ export class AnalysisController {
 
       LoggingHelper.logRequestReceived(analysisRequest, requestId);
 
+      const conversation = await conversationService.getOrCreateConversation(
+        userId,
+        requestBody.conversationId,
+        requestBody.query.trim()
+      );
+
+      await conversationService.addMessage(
+        conversation.id,
+        userId,
+        requestBody.query.trim(),
+        'user'
+      );
+
       const analysisResponse = await llmAnalysisService.processAnalysisRequest(analysisRequest);
 
       if (analysisResponse.error) {
@@ -95,8 +91,20 @@ export class AnalysisController {
         return;
       }
 
+      await conversationService.addMessage(
+        conversation.id,
+        userId,
+        analysisResponse.overview,
+        'assistant',
+        JSON.parse(JSON.stringify(analysisResponse))
+      );
+
+      const messages = await conversationService.getMessages(conversation.id);
+
       res.json({
         ...analysisResponse,
+        conversationId: conversation.id,
+        messages,
         requestId,
         timestamp: new Date().toISOString()
       });
@@ -111,94 +119,6 @@ export class AnalysisController {
         });
       }
     }
-  }
-
-  /**
-   * Validates the request body structure and content for analysis requests
-   * Checks for required fields, proper types, and business rule constraints
-   *
-   * @param requestBody - The request body object to validate
-   * @returns Object containing validation result and any error messages
-   */
-  private validateRequestBody(requestBody: any): { isValid: boolean; errors: string[] } {
-    const errors: string[] = [];
-
-    if (
-      !requestBody.query ||
-      typeof requestBody.query !== 'string' ||
-      requestBody.query.trim() === ''
-    ) {
-      errors.push('Query is required and must be a non-empty string.');
-    }
-
-    if (requestBody.query && requestBody.query.length > 2000) {
-      errors.push('Query is too long. Maximum length is 2000 characters.');
-    }
-
-    if (requestBody.conversationId && typeof requestBody.conversationId !== 'string') {
-      errors.push('Conversation ID must be a string.');
-    }
-
-    if (requestBody.preferences) {
-      const prefs = requestBody.preferences;
-
-      if (prefs.detailLevel && !['brief', 'moderate', 'detailed'].includes(prefs.detailLevel)) {
-        errors.push('Detail level must be one of: brief, moderate, detailed.');
-      }
-
-      if (
-        prefs.technicalDepth &&
-        !['basic', 'intermediate', 'advanced'].includes(prefs.technicalDepth)
-      ) {
-        errors.push('Technical depth must be one of: basic, intermediate, advanced.');
-      }
-
-      if (
-        prefs.maxSwitchesInComparison &&
-        (typeof prefs.maxSwitchesInComparison !== 'number' ||
-          prefs.maxSwitchesInComparison < 1 ||
-          prefs.maxSwitchesInComparison > 10)
-      ) {
-        errors.push('Max switches in comparison must be a number between 1 and 10.');
-      }
-
-      if (prefs.preferredResponseSections && !Array.isArray(prefs.preferredResponseSections)) {
-        errors.push('Preferred response sections must be an array.');
-      }
-    }
-
-    if (requestBody.followUpContext) {
-      const context = requestBody.followUpContext;
-
-      if (context.conversationHistory && !Array.isArray(context.conversationHistory)) {
-        errors.push('Conversation history must be an array.');
-      }
-
-      if (context.conversationHistory && context.conversationHistory.length > 20) {
-        errors.push('Conversation history is too long. Maximum 20 entries.');
-      }
-    }
-
-    if (requestBody.queryHints) {
-      const hints = requestBody.queryHints;
-
-      if (hints.switchNames && !Array.isArray(hints.switchNames)) {
-        errors.push('Switch names hint must be an array.');
-      }
-
-      if (hints.materials && !Array.isArray(hints.materials)) {
-        errors.push('Materials hint must be an array.');
-      }
-
-      if (hints.comparisonType && !['detailed', 'quick'].includes(hints.comparisonType)) {
-        errors.push('Comparison type must be either detailed or quick.');
-      }
-    }
-
-    return {
-      isValid: errors.length === 0,
-      errors
-    };
   }
 
   /**

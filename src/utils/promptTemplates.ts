@@ -5,7 +5,7 @@
  * JSON vs markdown format mismatch
  */
 
-import { QueryIntent } from '../types/analysisTypes.js';
+import { QueryIntent } from '../types/analysis.js';
 import { validateIntent } from './intentMapping.js';
 
 export interface TemplateOptions {

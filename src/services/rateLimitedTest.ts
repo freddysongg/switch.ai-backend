@@ -1,10 +1,4 @@
-import {
-  TestCase,
-  TestingService,
-  TestResult,
-  TestSuite,
-  TestSuiteResult
-} from './testingService.js';
+import { TestCase, TestingService, TestResult, TestSuite, TestSuiteResult } from './testing.js';
 
 /**
  * Rate-limited testing service that respects Gemini API free tier limits.

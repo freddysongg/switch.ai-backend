@@ -1,7 +1,7 @@
 import { mapIntentToQueryType } from '../utils/intentMapping.js';
 import { ChatService } from './chat.js';
-import { LLMAnalysisService } from './llmAnalysisService.js';
-import { EvaluationResult, MetricsCollectionService } from './metricsService.js';
+import { LLMAnalysisService } from './llmAnalysis.js';
+import { EvaluationResult, MetricsCollectionService } from './metrics.js';
 
 export interface TestCase {
   id: string;
