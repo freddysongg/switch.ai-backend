@@ -5,15 +5,26 @@ import {
   HarmBlockThreshold,
   HarmCategory
 } from '@google/generative-ai';
+import { traceable } from 'langsmith/traceable';
 
 import { AI_CONFIG } from '../config/ai.config.js';
 import { getSecret } from '../config/secrets.js';
 import type { QueryIntent } from '../types/analysis.js';
 import { classifyError, createErrorResponse, logError } from '../utils/errorHandler.js';
+import type { ILLMService } from './llm.factory.js';
 
-export class GeminiService {
+const LANGCHAIN_PROJECT = 'switchai-rag-optimization';
+const LANGCHAIN_TRACING_V2 = 'true';
+
+if (!process.env.LANGCHAIN_PROJECT) {
+  process.env.LANGCHAIN_PROJECT = LANGCHAIN_PROJECT;
+}
+if (!process.env.LANGCHAIN_TRACING_V2) {
+  process.env.LANGCHAIN_TRACING_V2 = LANGCHAIN_TRACING_V2;
+}
+
+export class GeminiService implements ILLMService {
   private model: GenerativeModel | null = null;
-  private readonly apiTimeout: number = AI_CONFIG.API_TIMEOUT_MS;
 
   private getModel(): GenerativeModel {
     if (!this.model) {
@@ -53,96 +64,102 @@ export class GeminiService {
   /**
    * Send a single-shot prompt to Gemini and return the generated text.
    * Uses enhanced error handling with structured fallback responses and timeout protection.
+   * Now instrumented with LangSmith tracing for observability.
    * @param prompt The complete prompt string for the LLM.
    * @param requestSpecificGenConfig Optional generation config to override defaults for this specific call.
    * @param context Optional context for better error handling (intent, query).
    * @param timeoutMs Optional timeout in milliseconds (defaults to 30 seconds).
    */
-  async generate(
-    prompt: string,
-    requestSpecificGenConfig?: Partial<GenerationConfig>,
-    context?: { intent?: QueryIntent; query?: string },
-    timeoutMs?: number
-  ): Promise<string> {
-    const timeout = timeoutMs || this.apiTimeout;
-
-    try {
-      const abortController = new AbortController();
-      const timeoutId = setTimeout(() => {
-        abortController.abort();
-      }, timeout);
+  public generate = traceable(
+    async (
+      prompt: string,
+      requestSpecificGenConfig?: Partial<GenerationConfig>,
+      context?: { intent?: QueryIntent; query?: string },
+      timeoutMs?: number
+    ): Promise<string> => {
+      const timeout = timeoutMs || AI_CONFIG.API_TIMEOUT_MS;
 
       try {
-        const chat = this.getModel().startChat({
-          history: [],
-          generationConfig: requestSpecificGenConfig
-        });
+        const abortController = new AbortController();
+        const timeoutId = setTimeout(() => {
+          abortController.abort();
+        }, timeout);
 
-        const result = await Promise.race([
-          chat.sendMessage(prompt),
-          new Promise<never>((_, reject) => {
-            abortController.signal.addEventListener('abort', () => {
-              reject(new Error(`Gemini API call timed out after ${timeout}ms`));
-            });
-          })
-        ]);
+        try {
+          const chat = this.getModel().startChat({
+            history: [],
+            generationConfig: requestSpecificGenConfig
+          });
 
-        clearTimeout(timeoutId);
-        const response = result.response;
+          const result = await Promise.race([
+            chat.sendMessage(prompt),
+            new Promise<never>((_, reject) => {
+              abortController.signal.addEventListener('abort', () => {
+                reject(new Error(`Gemini API call timed out after ${timeout}ms`));
+              });
+            })
+          ]);
 
-        if (!response) {
-          console.warn('Gemini API returned no response object.');
-          return this.handleGeminiError(new Error('No response object from Gemini API'), context);
-        }
+          clearTimeout(timeoutId);
+          const response = result.response;
 
-        if (!response.candidates || response.candidates.length === 0) {
-          console.warn('Gemini API returned no candidates in response.');
-          if (response.promptFeedback && response.promptFeedback.blockReason) {
+          if (!response) {
+            console.warn('Gemini API returned no response object.');
+            return this.handleGeminiError(new Error('No response object from Gemini API'), context);
+          }
+
+          if (!response.candidates || response.candidates.length === 0) {
+            console.warn('Gemini API returned no candidates in response.');
+            if (response.promptFeedback && response.promptFeedback.blockReason) {
+              console.warn(
+                `Prompt blocked by Gemini API due to: ${response.promptFeedback.blockReason}`
+              );
+              return `I am unable to respond to this query as it was blocked due to: ${response.promptFeedback.blockReason}.`;
+            }
+            return this.handleGeminiError(new Error('No candidates in response'), context);
+          }
+
+          const candidate = response.candidates[0];
+          if (
+            candidate.finishReason &&
+            candidate.finishReason !== 'STOP' &&
+            candidate.finishReason !== 'MAX_TOKENS'
+          ) {
             console.warn(
-              `Prompt blocked by Gemini API due to: ${response.promptFeedback.blockReason}`
+              `Gemini generation finished prematurely due to: ${candidate.finishReason}.`
             );
-            return `I am unable to respond to this query as it was blocked due to: ${response.promptFeedback.blockReason}.`;
+            if (candidate.finishReason === 'SAFETY') {
+              return "I'm sorry, I cannot provide a response to that query due to safety guidelines.";
+            }
+            return this.handleGeminiError(
+              new Error(`Generation finished: ${candidate.finishReason}`),
+              context
+            );
           }
-          return this.handleGeminiError(new Error('No candidates in response'), context);
-        }
 
-        const candidate = response.candidates[0];
-        if (
-          candidate.finishReason &&
-          candidate.finishReason !== 'STOP' &&
-          candidate.finishReason !== 'MAX_TOKENS'
-        ) {
-          console.warn(`Gemini generation finished prematurely due to: ${candidate.finishReason}.`);
-          if (candidate.finishReason === 'SAFETY') {
-            return "I'm sorry, I cannot provide a response to that query due to safety guidelines.";
-          }
+          const text = (candidate.content?.parts?.map((part) => part.text).join('') || '').trim();
+
+          return text.length > 0
+            ? text
+            : this.handleGeminiError(new Error('Empty response text'), context);
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      } catch (error: any) {
+        console.error('GeminiService error during generation:', error.message || error);
+
+        if (error.message?.includes('timed out')) {
           return this.handleGeminiError(
-            new Error(`Generation finished: ${candidate.finishReason}`),
+            new Error(`API call timed out after ${timeout}ms. Please try again.`),
             context
           );
         }
 
-        const text = (candidate.content?.parts?.map((part) => part.text).join('') || '').trim();
-
-        return text.length > 0
-          ? text
-          : this.handleGeminiError(new Error('Empty response text'), context);
-      } finally {
-        clearTimeout(timeoutId);
+        return this.handleGeminiError(error, context);
       }
-    } catch (error: any) {
-      console.error('GeminiService error during generation:', error.message || error);
-
-      if (error.message?.includes('timed out')) {
-        return this.handleGeminiError(
-          new Error(`API call timed out after ${timeout}ms. Please try again.`),
-          context
-        );
-      }
-
-      return this.handleGeminiError(error, context);
-    }
-  }
+    },
+    { name: 'GeminiService.generate' }
+  );
 
   /**
    * Enhanced error handling that provides structured responses instead of generic fallback

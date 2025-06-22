@@ -51,12 +51,6 @@ export interface User {
   created_at?: string;
 }
 
-export interface ReRankedItem {
-  item_id: string;
-  relevance_score: number;
-  justification: string;
-}
-
 export interface SwitchWithRelevanceInfo {
   name: string;
   manufacturer: string;

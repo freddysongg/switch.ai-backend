@@ -30,7 +30,7 @@ function getDbConnection() {
 
     dbInstance = drizzle(clientInstance, {
       schema,
-      logger: getSecret('NODE_ENV') === 'development'
+      logger: false
     });
   }
 

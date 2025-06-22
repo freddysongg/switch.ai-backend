@@ -8,7 +8,50 @@ import { addCSPNonce, cspMiddleware, developmentCSP } from './middleware/csp.js'
 import { errorHandler } from './middleware/error.js';
 import { inputSanitization } from './middleware/inputSanitization.js';
 import { rateLimiter } from './middleware/rateLimiter.js';
-import router from './routes/index.js';
+
+/**
+ * Check LangChain/LangSmith configuration status during startup
+ */
+async function checkLangChainStatus(): Promise<void> {
+  try {
+    console.log('🔍 Checking LangChain/LangSmith configuration...');
+
+    const langchainApiKey = getSecret('LANGCHAIN_API_KEY');
+    const hasApiKey = langchainApiKey && langchainApiKey.length > 0;
+
+    const langchainProject = process.env.LANGCHAIN_PROJECT;
+    const langchainTracing = process.env.LANGCHAIN_TRACING_V2;
+
+    console.log(`📊 LangChain Configuration Status:`);
+    console.log(`   • API Key: ${hasApiKey ? '✅ Present' : '❌ Missing'}`);
+    console.log(`   • Project: ${langchainProject ? `✅ ${langchainProject}` : '❌ Not set'}`);
+    console.log(`   • Tracing: ${langchainTracing === 'true' ? '✅ Enabled' : '❌ Disabled'}`);
+
+    try {
+      const { traceable } = await import('langsmith/traceable');
+      console.log('   • LangSmith Import: ✅ Successful');
+
+      const testTrace = traceable(async (input: string) => {
+        return `Test completed: ${input}`;
+      });
+
+      await testTrace('startup-check');
+      console.log('   • Tracing Functionality: ✅ Working');
+    } catch (importError) {
+      console.log('   • LangSmith Import: ❌ Failed');
+      console.error('     Error:', importError);
+    }
+
+    if (hasApiKey && langchainProject && langchainTracing === 'true') {
+      console.log('🎯 LangChain/LangSmith: ✅ Fully configured and ready');
+    } else {
+      console.log('⚠️ LangChain/LangSmith: Partially configured or disabled');
+    }
+  } catch (error) {
+    console.error('❌ Error checking LangChain status:', error);
+    console.log('⚠️ LangChain/LangSmith functionality may be limited');
+  }
+}
 
 /**
  * Application startup function
@@ -19,6 +62,10 @@ async function startServer() {
     console.log('🚀 Starting SwitchAI backend server...');
 
     await initializeSecrets();
+
+    const { default: router } = await import('./routes/index.js');
+
+    await checkLangChainStatus();
 
     const app = express();
     const port = parseInt(getSecret('PORT'), 10);

@@ -13,11 +13,16 @@ interface ApplicationSecrets {
   JWT_EXPIRES_IN: string;
 
   GEMINI_API_KEY: string;
+  CLAUDE_API_KEY?: string;
+
+  LANGCHAIN_API_KEY?: string;
 
   NODE_ENV: string;
   PORT: string;
 
+  HUGGINGFACE_HUB_TOKEN?: string;
   RATE_LIMITING_ENABLED: string;
+  IS_CLAUDE: string;
 }
 
 class SecretsManager {
@@ -59,11 +64,15 @@ class SecretsManager {
       JWT_EXPIRES_IN: this.getOptionalSecret('JWT_EXPIRES_IN') || '1h',
 
       GEMINI_API_KEY: this.getRequiredSecret('GEMINI_API_KEY'),
+      CLAUDE_API_KEY: this.getOptionalSecret('CLAUDE_API_KEY'),
+
+      LANGCHAIN_API_KEY: this.getOptionalSecret('LANGCHAIN_API_KEY'),
 
       NODE_ENV: this.getOptionalSecret('NODE_ENV') || 'development',
       PORT: this.getOptionalSecret('PORT') || '3000',
-
-      RATE_LIMITING_ENABLED: this.getOptionalSecret('RATE_LIMITING_ENABLED') || 'true'
+      HUGGINGFACE_HUB_TOKEN: this.getOptionalSecret('HUGGINGFACE_HUB_TOKEN'),
+      RATE_LIMITING_ENABLED: this.getOptionalSecret('RATE_LIMITING_ENABLED') || 'true',
+      IS_CLAUDE: this.getOptionalSecret('IS_CLAUDE') || 'false'
     };
   }
 
@@ -86,6 +95,19 @@ class SecretsManager {
 
     if (!secrets.GEMINI_API_KEY || secrets.GEMINI_API_KEY.length < 20) {
       validationErrors.push('GEMINI_API_KEY must be a valid API key');
+    }
+
+    // Validate Claude API key when IS_CLAUDE is true
+    const isClaudeEnabled = secrets.IS_CLAUDE.toLowerCase() === 'true';
+    if (isClaudeEnabled) {
+      if (!secrets.CLAUDE_API_KEY || secrets.CLAUDE_API_KEY.length < 20) {
+        validationErrors.push('CLAUDE_API_KEY must be a valid API key when IS_CLAUDE is true');
+      }
+    }
+
+    // Validate IS_CLAUDE is a boolean string
+    if (!['true', 'false'].includes(secrets.IS_CLAUDE.toLowerCase())) {
+      validationErrors.push('IS_CLAUDE must be either "true" or "false"');
     }
 
     const port = parseInt(secrets.PORT, 10);

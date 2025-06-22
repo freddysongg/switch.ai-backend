@@ -1,5 +1,4 @@
 import { mapIntentToQueryType } from '../utils/intentMapping.js';
-import { ChatService } from './chat.js';
 import { LLMAnalysisService } from './llmAnalysis.js';
 import { EvaluationResult, MetricsCollectionService } from './metrics.js';
 
@@ -74,12 +73,10 @@ export interface TestSuiteResult {
 export class TestingService {
   private metricsService: MetricsCollectionService;
   private analysisService: LLMAnalysisService;
-  private chatService: ChatService;
 
   constructor() {
     this.metricsService = new MetricsCollectionService();
     this.analysisService = new LLMAnalysisService();
-    this.chatService = new ChatService();
   }
 
   /**
@@ -238,7 +235,12 @@ export class TestingService {
     }
 
     if (testCase.tags?.includes('switch-extraction')) {
-      const comparisonResult = await this.chatService.processComparisonQuery(testCase.query);
+      const request = {
+        query: testCase.query,
+        requestId: context.requestId,
+        timestamp: new Date()
+      };
+      const comparisonResult = await this.analysisService.processAnalysisRequest(request);
       return { comparison: comparisonResult, context };
     }
 

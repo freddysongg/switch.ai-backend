@@ -39,7 +39,8 @@ import {
   type ValidationResult
 } from '../utils/responseValidator.js';
 import { DatabaseService } from './db.js';
-import { GeminiService } from './gemini.js';
+import { SwitchAIRAGChain, type SwitchAIChainConfig } from './langchain/chain.js';
+import { createLlmService, type ILLMService } from './llm.factory.js';
 import { MetricsCollectionService } from './metrics.js';
 
 function logStep(step: string, message: string, data?: any): void {
@@ -55,15 +56,54 @@ function logError(workflowId: string, step: string, error: any): void {
 }
 
 export class LLMAnalysisService {
-  private geminiService: GeminiService;
+  private llmService: ILLMService;
   private databaseService: DatabaseService;
   private activeWorkflows: Map<string, Workflow> = new Map();
   private metricsService: MetricsCollectionService;
+  private ragChain: SwitchAIRAGChain;
+  private manufacturerPrefixes: string[] = [];
+
+  private static prefixLoadingPromise: Promise<string[]> | null = null;
+  private static sharedManufacturerPrefixes: string[] = [];
 
   constructor() {
-    this.geminiService = new GeminiService();
+    this.llmService = createLlmService();
     this.databaseService = new DatabaseService();
     this.metricsService = new MetricsCollectionService();
+
+    const chainConfig: SwitchAIChainConfig = {
+      retriever: {
+        k: 10,
+        rrfK: 60
+      },
+      llm: {
+        temperature: 0.3,
+        maxOutputTokens: 3000
+      }
+    };
+    this.ragChain = new SwitchAIRAGChain(chainConfig);
+
+    this.initializeManufacturerPrefixes();
+  }
+
+  private async initializeManufacturerPrefixes(): Promise<void> {
+    try {
+      if (!LLMAnalysisService.prefixLoadingPromise) {
+        LLMAnalysisService.prefixLoadingPromise = this.databaseService.getManufacturerPrefixes();
+      }
+
+      const prefixes = await LLMAnalysisService.prefixLoadingPromise;
+
+      if (LLMAnalysisService.sharedManufacturerPrefixes.length === 0) {
+        console.log(`Loaded ${prefixes.length} manufacturer prefixes for switch extraction`);
+        LLMAnalysisService.sharedManufacturerPrefixes = prefixes;
+      }
+
+      this.manufacturerPrefixes = LLMAnalysisService.sharedManufacturerPrefixes;
+    } catch (err) {
+      console.warn('Failed to load manufacturer prefixes:', err);
+      this.manufacturerPrefixes = [];
+    }
   }
 
   /**
@@ -423,7 +463,7 @@ export class LLMAnalysisService {
     try {
       const prompt = PromptHelper.buildIntentRecognitionPrompt(query);
 
-      const llmResponse = await this.geminiService.generate(
+      const llmResponse = await this.llmService.generate(
         prompt,
         {
           temperature: 0.1,
@@ -570,25 +610,7 @@ export class LLMAnalysisService {
   ): IntentRecognitionResult {
     const queryLower = query.toLowerCase();
 
-    const switchPatterns = [
-      /(?:cherry\s*mx\s*\w+)/gi,
-      /(?:gateron\s*\w+)/gi,
-      /(?:kailh\s*\w+)/gi,
-      /(?:holy\s*panda)/gi,
-      /(?:zealios)/gi,
-      /(?:topre)/gi,
-      /(?:alpaca)/gi,
-      /(?:ink\s*black)/gi,
-      /(?:box\s*\w+)/gi
-    ];
-
-    const extractedSwitches: string[] = [];
-    switchPatterns.forEach((pattern) => {
-      const matches = query.match(pattern);
-      if (matches) {
-        extractedSwitches.push(...matches.map((m) => m.trim()));
-      }
-    });
+    const extractedSwitches = this.extractSwitchNamesFromQuery(query);
 
     const switchTypeKeywords = ['tactile', 'linear', 'clicky', 'switches', 'switch', 'mechanical'];
     const hasSwitchTypeKeywords = switchTypeKeywords.some((keyword) =>
@@ -692,38 +714,35 @@ export class LLMAnalysisService {
     requestId?: string
   ): Promise<AnalysisResponse> {
     try {
-      const prompt = this.buildMarkdownEnforcingPrompt(promptContext);
+      logStep('analysis_generation', 'Generating analysis response with LCEL chain', {
+        intentCategory: promptContext.intent.category,
+        switchesInContext: promptContext.databaseContext.totalFound,
+        requestId
+      });
+
+      const chainInput = {
+        query: promptContext.query,
+        conversationHistory: this.convertConversationHistory(
+          promptContext.followUpContext?.conversationHistory
+        ),
+        requestId
+      };
+
+      const isComparison = promptContext.intent.category === 'switch_comparison';
+      const chainOutput = isComparison
+        ? await this.ragChain.invokeComparison(chainInput)
+        : await this.ragChain.invoke(chainInput);
 
       if (requestId) {
         LoggingHelper.logPromptConstruction(
           requestId,
-          prompt.length,
-          promptContext.databaseContext.totalFound > 0,
+          chainOutput.response.length,
+          chainOutput.retrievedDocuments.length > 0,
           promptContext.intent.category
         );
       }
 
-      logStep('analysis_generation', 'Generating LLM analysis response with markdown templates', {
-        intentCategory: promptContext.intent.category,
-        promptLength: prompt.length,
-        switchesInContext: promptContext.databaseContext.totalFound,
-        promptType: this.getPromptType(promptContext.intent.category),
-        templateType: 'markdown_enforced'
-      });
-
-      const llmStartTime = Date.now();
-      const llmResponse = await this.callLLM(prompt, {
-        temperature: 0.3,
-        maxOutputTokens: 3000,
-        topP: 0.9
-      });
-      const llmResponseTime = Date.now() - llmStartTime;
-
-      if (requestId) {
-        LoggingHelper.logLLMResponse(requestId, llmResponse, llmResponseTime);
-      }
-
-      const analysisResponse = this.parseAndValidateMarkdownResponse(llmResponse, promptContext);
+      const analysisResponse = this.parseChainResponse(chainOutput, promptContext);
 
       try {
         this.validateMandatoryOverview(analysisResponse);
@@ -770,31 +789,27 @@ export class LLMAnalysisService {
         }
       }
 
-      logStep(
-        'analysis_generation',
-        'LLM analysis response generated successfully with validation',
-        {
-          responseStructure: Object.keys(analysisResponse),
-          overviewLength: analysisResponse.overview?.length || 0,
-          tokensUsed: llmResponse.usage?.totalTokens,
-          promptType: this.getPromptType(promptContext.intent.category),
-          validationScore: validationResult.compliance.overallScore,
-          formatCompliant: validationResult.isValid
-        }
-      );
+      logStep('analysis_generation', 'LCEL chain response generated successfully with validation', {
+        responseStructure: Object.keys(analysisResponse),
+        overviewLength: analysisResponse.overview?.length || 0,
+        retrievedDocuments: chainOutput.retrievedDocuments.length,
+        processingTime: chainOutput.metadata.processingTimeMs,
+        validationScore: validationResult.compliance.overallScore,
+        formatCompliant: validationResult.isValid
+      });
 
       return analysisResponse;
     } catch (error: any) {
       logError('analysis_generation', 'response_generation', error);
 
-      console.log('API failure detected, attempting offline knowledge fallback...');
+      console.log('LCEL chain failed, attempting offline knowledge fallback...');
       return this.generateOfflineKnowledgeResponse(promptContext, error);
     }
   }
 
   /**
    * ENHANCEMENT: Generate response using offline knowledge when LLM API fails
-   * Provides meaningful analysis even during complete API outages (Task 2.5)
+   * Provides meaningful analysis even during complete API outages
    */
   private generateOfflineKnowledgeResponse(
     promptContext: LLMPromptContext,
@@ -806,72 +821,8 @@ export class LLMAnalysisService {
 
     const edgeCaseType = this.detectEdgeCaseType(query, switches);
 
-    const basicSwitchInfo: Record<string, any> = {
-      'cherry mx red': {
-        type: 'Linear',
-        force: '45g',
-        travel: '4mm',
-        sound: 'Quiet',
-        use: 'Gaming'
-      },
-      'cherry mx blue': {
-        type: 'Clicky',
-        force: '50g',
-        travel: '4mm',
-        sound: 'Loud click',
-        use: 'Typing'
-      },
-      'cherry mx brown': {
-        type: 'Tactile',
-        force: '45g',
-        travel: '4mm',
-        sound: 'Quiet tactile',
-        use: 'Mixed'
-      },
-      'gateron red': {
-        type: 'Linear',
-        force: '45g',
-        travel: '4mm',
-        sound: 'Smooth',
-        use: 'Gaming'
-      },
-      'gateron yellow': {
-        type: 'Linear',
-        force: '50g',
-        travel: '4mm',
-        sound: 'Smooth',
-        use: 'Gaming'
-      },
-      'gateron blue': {
-        type: 'Clicky',
-        force: '50g',
-        travel: '4mm',
-        sound: 'Sharp click',
-        use: 'Typing'
-      },
-      'gateron brown': {
-        type: 'Tactile',
-        force: '45g',
-        travel: '4mm',
-        sound: 'Soft tactile',
-        use: 'Mixed'
-      },
-      'kailh red': { type: 'Linear', force: '50g', travel: '4mm', sound: 'Smooth', use: 'Gaming' },
-      'kailh blue': {
-        type: 'Clicky',
-        force: '50g',
-        travel: '4mm',
-        sound: 'Crisp click',
-        use: 'Typing'
-      },
-      'holy panda': {
-        type: 'Tactile',
-        force: '67g',
-        travel: '4mm',
-        sound: 'Thocky',
-        use: 'Enthusiast'
-      }
-    };
+    const databaseSwitches = promptContext.databaseContext.switches || [];
+    const availableSwitchData = this.extractAvailableSwitchData(databaseSwitches);
 
     let overview: string;
     let analysis: string;
@@ -881,23 +832,23 @@ export class LLMAnalysisService {
         edgeCaseType,
         query,
         switches,
-        basicSwitchInfo
+        availableSwitchData
       );
       overview = edgeCaseResponse.overview;
       analysis = edgeCaseResponse.analysis;
     } else {
       switch (intent) {
         case 'switch_comparison':
-          overview = this.generateComparisonOverview(switches, basicSwitchInfo);
-          analysis = this.generateComparisonAnalysis(switches, basicSwitchInfo);
+          overview = this.generateComparisonOverview(switches, availableSwitchData);
+          analysis = this.generateComparisonAnalysis(switches, availableSwitchData);
           break;
         case 'material_analysis':
           overview = this.generateMaterialOverview(query);
           analysis = this.generateMaterialAnalysis();
           break;
         default:
-          overview = this.generateGeneralOverview(switches, basicSwitchInfo, query);
-          analysis = this.generateGeneralAnalysis(switches, basicSwitchInfo);
+          overview = this.generateGeneralOverview(switches, availableSwitchData, query);
+          analysis = this.generateGeneralAnalysis(switches, availableSwitchData);
           break;
       }
     }
@@ -905,10 +856,10 @@ export class LLMAnalysisService {
     const response: AnalysisResponse = {
       overview,
       analysis,
-      dataSource: 'Offline Knowledge Base',
+      dataSource: 'Database + Offline Fallback',
       analysisConfidence: 'Limited (API Unavailable)',
       additionalNotes:
-        `Generated using offline knowledge fallback due to API service unavailability. ` +
+        `Generated using database data where available, supplemented with offline knowledge fallback due to API service unavailability. ` +
         `Original error: ${originalError?.message || 'API timeout'}. ` +
         `For complete analysis, please try again when service is restored. ` +
         `Generated at ${new Date().toISOString()}`
@@ -917,7 +868,7 @@ export class LLMAnalysisService {
     logStep('offline_fallback', 'Offline knowledge response generated', {
       intent,
       edgeCaseType,
-      switchesRecognized: switches.filter((s) => basicSwitchInfo[s.toLowerCase()]).length,
+      databaseSwitchesFound: databaseSwitches.filter((s) => s.found).length,
       totalSwitches: switches.length,
       responseStructure: Object.keys(response)
     });
@@ -925,9 +876,64 @@ export class LLMAnalysisService {
     return response;
   }
 
+  /**
+   * Extract available switch data from database context
+   */
+  private extractAvailableSwitchData(databaseSwitches: any[]): Record<string, any> {
+    const switchData: Record<string, any> = {};
+
+    for (const switchResult of databaseSwitches) {
+      if (switchResult.found && switchResult.data) {
+        const data = switchResult.data;
+        switchData[data.switchName.toLowerCase()] = {
+          name: data.switchName,
+          manufacturer: data.manufacturer,
+          type: data.type,
+          actuationForce: data.actuationForceG ? `${data.actuationForceG}g` : 'Unknown',
+          totalTravel: data.totalTravelMm ? `${data.totalTravelMm}mm` : 'Unknown',
+          topHousing: data.topHousing,
+          bottomHousing: data.bottomHousing,
+          stem: data.stem,
+          mount: data.mount,
+          spring: data.spring,
+          sound: this.inferSoundFromType(data.type),
+          useCase: this.inferUseCaseFromType(data.type)
+        };
+      }
+    }
+
+    return switchData;
+  }
+
+  /**
+   * Infer sound characteristics from switch type (LLM knowledge for missing database fields)
+   */
+  private inferSoundFromType(type: string | undefined): string {
+    if (!type) return 'Unknown';
+
+    const typeLower = type.toLowerCase();
+    if (typeLower.includes('linear')) return 'Smooth and quiet';
+    if (typeLower.includes('tactile')) return 'Soft tactile bump';
+    if (typeLower.includes('clicky')) return 'Audible click';
+    return 'Varies by construction';
+  }
+
+  /**
+   * Infer use case from switch type (LLM knowledge for missing database fields)
+   */
+  private inferUseCaseFromType(type: string | undefined): string {
+    if (!type) return 'General purpose';
+
+    const typeLower = type.toLowerCase();
+    if (typeLower.includes('linear')) return 'Gaming and smooth typing';
+    if (typeLower.includes('tactile')) return 'Typing and mixed use';
+    if (typeLower.includes('clicky')) return 'Typing and feedback';
+    return 'General purpose';
+  }
+
   private detectEdgeCaseType(
     query: string,
-    switches: string[]
+    _switches: string[]
   ): 'vague_query' | 'unknown_switch' | 'mixed_validity' | 'ultra_specific' | null {
     const queryLower = query.toLowerCase();
 
@@ -951,32 +957,6 @@ export class LLMAnalysisService {
       return 'ultra_specific';
     }
 
-    if (switches.length > 0) {
-      const basicSwitchInfo: Record<string, boolean> = {
-        'cherry mx red': true,
-        'cherry mx blue': true,
-        'cherry mx brown': true,
-        'gateron red': true,
-        'gateron yellow': true,
-        'gateron blue': true,
-        'gateron brown': true,
-        'kailh red': true,
-        'kailh blue': true,
-        'holy panda': true
-      };
-
-      const knownSwitches = switches.filter((s) => basicSwitchInfo[s.toLowerCase()]);
-      const unknownSwitches = switches.filter((s) => !basicSwitchInfo[s.toLowerCase()]);
-
-      if (knownSwitches.length > 0 && unknownSwitches.length > 0) {
-        return 'mixed_validity';
-      }
-
-      if (unknownSwitches.length > 0 && queryLower.includes('vs')) {
-        return 'unknown_switch';
-      }
-    }
-
     return null;
   }
 
@@ -984,7 +964,7 @@ export class LLMAnalysisService {
     edgeCaseType: 'vague_query' | 'unknown_switch' | 'mixed_validity' | 'ultra_specific',
     query: string,
     switches: string[],
-    basicSwitchInfo: Record<string, any>
+    availableSwitchData: Record<string, any>
   ): { overview: string; analysis: string } {
     switch (edgeCaseType) {
       case 'vague_query':
@@ -993,41 +973,45 @@ export class LLMAnalysisService {
           analysis: `## Analysis\n\n**General Switch Categories:**\n\n- **Linear**: Smooth keystroke, no tactile bump (good for gaming)\n- **Tactile**: Bump during actuation (good for typing and mixed use)\n- **Clicky**: Tactile bump with audible click (good for typing)\n\n**Key Factors to Consider:**\n- **Actuation Force**: Light (45g), medium (50-60g), or heavy (65g+)\n- **Sound Profile**: Quiet, tactile, or loud clicky\n- **Use Case**: Gaming, typing, office environment\n- **Personal Preference**: Feel, sound, and responsiveness **preferences**\n\nTo recommend a specific switch, please let me know:\n- Intended use (gaming, typing, office)\n- Preferred sound level (quiet, moderate, loud)\n- Desired feel (smooth, tactile feedback, clicky)\n- Any switches you've tried before`
         };
 
-      case 'unknown_switch':
-        const knownSwitch = switches.find((s) => basicSwitchInfo[s.toLowerCase()]);
-        const unknownSwitches = switches.filter((s) => !basicSwitchInfo[s.toLowerCase()]);
-        return {
-          overview: `## Overview\n\nThis comparison includes **${knownSwitch || 'cherry mx red'}** and **${unknownSwitches[0] || 'imaginary super switch 9000'}**. I have detailed **information** for **${knownSwitch || 'cherry mx red'}**, but the **${unknownSwitches[0] || 'imaginary super switch 9000'}** is **unknown** in my database. I'll provide what I can about the known switch and explain why the comparison is limited.`,
-          analysis: `## Analysis\n\n**Known Switch Information:**\n${knownSwitch ? `- **${knownSwitch}**: ${basicSwitchInfo[knownSwitch.toLowerCase()]?.type} switch with ${basicSwitchInfo[knownSwitch.toLowerCase()]?.force} actuation force\n` : '- **Cherry MX Red**: Linear switch with 45g actuation force\n'}\n**Unknown Switch Status:**\n- **${unknownSwitches[0] || 'Imaginary Super Switch 9000'}**: No **information** available in offline database\n- Cannot provide specifications, feel, or sound characteristics\n- May be fictional, prototype, or extremely rare switch\n\n**Recommendation:**\nFor meaningful comparisons, please specify known switch models from major manufacturers like Cherry MX, Gateron, Kailh, or other established brands.`
-        };
-
-      case 'mixed_validity':
-        const knownSw = switches.find((s) => basicSwitchInfo[s.toLowerCase()]);
-        const unknownSw = switches.find((s) => !basicSwitchInfo[s.toLowerCase()]);
-        return {
-          overview: `## Overview\n\nThis comparison includes **${knownSw || 'gateron yellow'}** (known switch) and **${unknownSw || 'some random switch I made up'}** (unknown switch). I can provide detailed information for **${knownSw || 'gateron yellow'}**, but the other switch is **unknown** and **undefined** in my database.`,
-          analysis: `## Analysis\n\n**Known Switch Details:**\n${knownSw ? `- **${knownSw}**: ${basicSwitchInfo[knownSw.toLowerCase()]?.type} switch, ${basicSwitchInfo[knownSw.toLowerCase()]?.force} actuation force, ${basicSwitchInfo[knownSw.toLowerCase()]?.sound} sound profile\n` : '- **Gateron Yellow**: Linear switch, 50g actuation force, smooth sound profile\n'}\n**Unknown Switch Status:**\n- **${unknownSw || 'Some Random Switch I Made Up'}**: Status **unknown** and **undefined**\n- No specifications available in offline database\n- Cannot determine compatibility or characteristics\n\n**Partial Comparison Result:**\nA meaningful comparison requires information for both switches. Please specify a known switch model to replace the **unknown** entity.`
-        };
-
       case 'ultra_specific':
-        const targetSwitch =
-          switches.find((s) => s.toLowerCase().includes('gateron yellow')) || 'gateron yellow';
+        const targetSwitch = switches[0] || 'switch';
+        const switchData = availableSwitchData[targetSwitch.toLowerCase()];
         return {
           overview: `## Overview\n\nYou're asking for very specific technical details about the **spring** **material** composition of **${targetSwitch}**. While I can provide general information about switch springs, exact specifications like spring constants require manufacturer documentation that may not be publicly available.`,
-          analysis: `## Analysis\n\n**General Spring Information:**\n- **Material**: Most switches use **stainless steel** springs\n- **Spring** Type: Typically gold-plated **stainless steel** for corrosion resistance\n- **Force Characteristics**: Progressive force curve with specific actuation and bottom-out points\n\n**${targetSwitch} Spring Details:**\n- **Material**: **Stainless steel** (standard for most switches)\n- **Finish**: Likely gold-plated for durability\n- **Force Rating**: 50g actuation force (${targetSwitch})\n\n**Exact Specifications:**\nPrecise **spring** constant values and detailed **material** composition (alloy ratios, heat treatment) are typically proprietary manufacturer information not available in standard documentation.`
+          analysis: this.generateUltraSpecificAnalysis(targetSwitch, switchData)
         };
 
       default:
         return {
-          overview: `## Overview\n\nI can provide general switch information, but the full analysis system is currently unavailable.`,
-          analysis: `## Analysis\n\nLimited information available in offline mode.`
+          overview: `## Overview\n\nI can provide analysis based on available database information and general switch knowledge.`,
+          analysis: `## Analysis\n\nAnalysis completed using available data sources.`
         };
     }
   }
 
+  private generateUltraSpecificAnalysis(switchName: string, switchData: any): string {
+    let analysis = `## Analysis\n\n**General Spring Information:**\n- **Material**: Most switches use **stainless steel** springs\n- **Spring** Type: Typically gold-plated **stainless steel** for corrosion resistance\n- **Force Characteristics**: Progressive force curve with specific actuation and bottom-out points\n\n`;
+
+    if (switchData) {
+      analysis += `**${switchName} Database Information:**\n`;
+      if (switchData.spring) analysis += `- **Spring**: ${switchData.spring}\n`;
+      if (switchData.actuationForce)
+        analysis += `- **Actuation Force**: ${switchData.actuationForce}\n`;
+      if (switchData.manufacturer) analysis += `- **Manufacturer**: ${switchData.manufacturer}\n`;
+      analysis += `- **Material**: **Stainless steel** (standard for most switches)\n`;
+      analysis += `- **Finish**: Likely gold-plated for durability\n\n`;
+    } else {
+      analysis += `**${switchName} Information:**\n- Limited database information available\n- **Material**: **Stainless steel** (standard for most switches)\n- **Finish**: Likely gold-plated for durability\n\n`;
+    }
+
+    analysis += `**Exact Specifications:**\nPrecise **spring** constant values and detailed **material** composition (alloy ratios, heat treatment) are typically proprietary manufacturer information not available in standard documentation.`;
+
+    return analysis;
+  }
+
   private generateComparisonOverview(
     switches: string[],
-    knowledgeBase: Record<string, any>
+    availableSwitchData: Record<string, any>
   ): string {
     if (switches.length < 2) {
       return (
@@ -1036,12 +1020,12 @@ export class LLMAnalysisService {
       );
     }
 
-    const knownSwitches = switches.filter((s) => knowledgeBase[s.toLowerCase()]);
-    const unknownSwitches = switches.filter((s) => !knowledgeBase[s.toLowerCase()]);
+    const knownSwitches = switches.filter((s) => availableSwitchData[s.toLowerCase()]);
+    const unknownSwitches = switches.filter((s) => !availableSwitchData[s.toLowerCase()]);
 
     return (
-      `## Overview\n\nThis is a basic comparison between ${switches.join(' vs ')} using offline knowledge. ` +
-      `${knownSwitches.length > 0 ? `I have basic information for: ${knownSwitches.join(', ')}.` : ''} ` +
+      `## Overview\n\nThis is a comparison between ${switches.join(' vs ')} using available database information and general knowledge. ` +
+      `${knownSwitches.length > 0 ? `I have database information for: ${knownSwitches.join(', ')}.` : ''} ` +
       `${unknownSwitches.length > 0 ? `Limited information available for: ${unknownSwitches.join(', ')}.` : ''} ` +
       `For detailed specifications and comprehensive analysis, please try again when the full service is available.`
     );
@@ -1049,31 +1033,36 @@ export class LLMAnalysisService {
 
   private generateComparisonAnalysis(
     switches: string[],
-    knowledgeBase: Record<string, any>
+    availableSwitchData: Record<string, any>
   ): string {
-    let analysis = `## Technical Specifications\n\n| Switch | Type | Force | Travel | Sound Profile |\n|--------|------|-------|--------|---------------|\n`;
+    let analysis = `## Technical Specifications\n\n| Switch | Type | Manufacturer | Force | Travel | Housing |\n|--------|------|--------------|-------|--------|---------|\n`;
 
     switches.forEach((switchName) => {
-      const info = knowledgeBase[switchName.toLowerCase()];
+      const info = availableSwitchData[switchName.toLowerCase()];
       if (info) {
-        analysis += `| ${switchName} | ${info.type} | ${info.force} | ${info.travel} | ${info.sound} |\n`;
+        analysis += `| ${switchName} | ${info.type || 'Unknown'} | ${info.manufacturer || 'Unknown'} | ${info.actuationForce || 'Unknown'} | ${info.totalTravel || 'Unknown'} | ${info.topHousing || 'Unknown'} |\n`;
       } else {
-        analysis += `| ${switchName} | Unknown | Unknown | Unknown | Unknown |\n`;
+        analysis += `| ${switchName} | Unknown | Unknown | Unknown | Unknown | Unknown |\n`;
       }
     });
 
-    analysis += `\n## Comparative Analysis\n\nBased on available offline knowledge:\n\n`;
-    analysis += `- **Switch Types**: ${switches.map((s) => knowledgeBase[s.toLowerCase()]?.type || 'Unknown').join(', ')}\n`;
-    analysis += `- **Actuation Forces**: ${switches.map((s) => knowledgeBase[s.toLowerCase()]?.force || 'Unknown').join(', ')}\n`;
-    analysis += `- **Best Use Cases**: ${switches.map((s) => knowledgeBase[s.toLowerCase()]?.use || 'Unknown').join(', ')}\n\n`;
-    analysis += `**Note**: This comparison is based on basic specifications only. For detailed feel, sound analysis, and specific recommendations, please access the full service.`;
+    analysis += `\n## Comparative Analysis\n\nBased on available database information:\n\n`;
+
+    const knownSwitches = switches.filter((s) => availableSwitchData[s.toLowerCase()]);
+    if (knownSwitches.length > 0) {
+      analysis += `- **Switch Types**: ${knownSwitches.map((s) => availableSwitchData[s.toLowerCase()]?.type || 'Unknown').join(', ')}\n`;
+      analysis += `- **Manufacturers**: ${knownSwitches.map((s) => availableSwitchData[s.toLowerCase()]?.manufacturer || 'Unknown').join(', ')}\n`;
+      analysis += `- **Use Cases**: ${knownSwitches.map((s) => availableSwitchData[s.toLowerCase()]?.useCase || 'Unknown').join(', ')}\n\n`;
+    }
+
+    analysis += `**Note**: This comparison is based on available database specifications. For detailed feel, sound analysis, and specific recommendations, please access the full service.`;
 
     return analysis;
   }
 
   private generateMaterialOverview(_query: string): string {
     return (
-      `## Overview\n\nI can provide basic material information, but the full material analysis system is currently unavailable. ` +
+      `## Overview\n\nI can provide basic material information based on available database data and general knowledge, though the full material analysis system is currently unavailable. ` +
       `This response covers general material properties for keyboard switches.`
     );
   }
@@ -1095,34 +1084,38 @@ export class LLMAnalysisService {
 
   private generateGeneralOverview(
     switches: string[],
-    knowledgeBase: Record<string, any>,
+    availableSwitchData: Record<string, any>,
     _query: string
   ): string {
     if (switches.length === 0) {
       return (
-        `## Overview\n\nI can provide general switch information, but the full analysis system is currently unavailable. ` +
+        `## Overview\n\nI can provide general switch information based on available database data and general knowledge, though the full analysis system is currently unavailable. ` +
         `For specific switch details, please specify switch names in your query.`
       );
     }
 
     const switchName = switches[0];
-    const info = knowledgeBase[switchName.toLowerCase()];
+    const info = availableSwitchData[switchName.toLowerCase()];
 
     if (info) {
       return (
-        `## Overview\n\n**${switchName}** is a ${info.type.toLowerCase()} switch with ${info.force} actuation force. ` +
-        `It's commonly used for ${info.use.toLowerCase()} applications and has a ${info.sound.toLowerCase()} sound profile. ` +
-        `This is basic information only - for detailed specifications and recommendations, please access the full service.`
+        `## Overview\n\n**${switchName}** is a ${info.type?.toLowerCase() || 'keyboard'} switch manufactured by ${info.manufacturer || 'unknown manufacturer'}. ` +
+        `${info.actuationForce !== 'Unknown' ? `It has ${info.actuationForce} actuation force` : 'Actuation force varies'}. ` +
+        `${info.useCase !== 'General purpose' ? `It's commonly used for ${info.useCase.toLowerCase()} applications` : 'It has general purpose applications'}. ` +
+        `This is based on available database information - for detailed specifications and recommendations, please access the full service.`
       );
     }
 
     return (
-      `## Overview\n\nLimited information available for **${switchName}** in offline mode. ` +
+      `## Overview\n\nLimited information available for **${switchName}** in the database. ` +
       `For detailed specifications, sound analysis, and recommendations, please try again when the full service is available.`
     );
   }
 
-  private generateGeneralAnalysis(switches: string[], knowledgeBase: Record<string, any>): string {
+  private generateGeneralAnalysis(
+    switches: string[],
+    availableSwitchData: Record<string, any>
+  ): string {
     if (switches.length === 0) {
       return (
         `## Analysis\n\n**General Switch Categories:**\n\n` +
@@ -1137,26 +1130,31 @@ export class LLMAnalysisService {
     }
 
     const switchName = switches[0];
-    const info = knowledgeBase[switchName.toLowerCase()];
+    const info = availableSwitchData[switchName.toLowerCase()];
 
     if (info) {
       return (
-        `## Analysis\n\n**${switchName} Characteristics:**\n\n` +
-        `- **Type**: ${info.type} switch\n` +
-        `- **Actuation Force**: ${info.force}\n` +
-        `- **Travel Distance**: ${info.travel}\n` +
-        `- **Sound Profile**: ${info.sound}\n` +
-        `- **Best Use**: ${info.use}\n\n` +
-        `## Recommendations\n\n` +
-        `Based on these basic specifications, this switch is suitable for ${info.use.toLowerCase()} use cases. ` +
+        `## Analysis\n\n**${switchName} Database Information:**\n\n` +
+        `- **Type**: ${info.type || 'Unknown'}\n` +
+        `- **Manufacturer**: ${info.manufacturer || 'Unknown'}\n` +
+        `- **Actuation Force**: ${info.actuationForce || 'Unknown'}\n` +
+        `- **Total Travel**: ${info.totalTravel || 'Unknown'}\n` +
+        `- **Sound Profile**: ${info.sound || 'Unknown'}\n` +
+        `- **Best Use**: ${info.useCase || 'General purpose'}\n` +
+        `${info.topHousing ? `- **Top Housing**: ${info.topHousing}\n` : ''}` +
+        `${info.bottomHousing ? `- **Bottom Housing**: ${info.bottomHousing}\n` : ''}` +
+        `${info.stem ? `- **Stem**: ${info.stem}\n` : ''}` +
+        `${info.spring ? `- **Spring**: ${info.spring}\n` : ''}` +
+        `\n## Database-Based Recommendations\n\n` +
+        `Based on the database specifications, this switch is suitable for ${info.useCase?.toLowerCase() || 'general'} use cases. ` +
         `For detailed comparisons, specific use case recommendations, and sound/feel analysis, please access the full service.`
       );
     }
 
     return (
-      `## Analysis\n\nDetailed analysis for **${switchName}** is not available in offline mode. ` +
+      `## Analysis\n\nDetailed analysis for **${switchName}** is not available in the database. ` +
       `Please try again when the full service is restored for comprehensive switch analysis including:\n\n` +
-      `- Detailed specifications\n- Sound and feel characteristics\n- Use case recommendations\n- Comparisons with similar switches`
+      `- Detailed specifications from database\n- Sound and feel characteristics\n- Use case recommendations\n- Comparisons with similar switches`
     );
   }
 
@@ -1647,7 +1645,7 @@ export class LLMAnalysisService {
       const contextIntent: QueryIntent = 'general_switch_info';
       const contextQuery: string = '';
 
-      const rawResponse = await this.geminiService.generate(prompt, generationConfig, {
+      const rawResponse = await this.llmService.generate(prompt, generationConfig, {
         intent: contextIntent,
         query: contextQuery
       });
@@ -1663,7 +1661,7 @@ export class LLMAnalysisService {
           completionTokens: this.estimateTokens(rawResponse),
           totalTokens: this.estimateTokens(prompt) + this.estimateTokens(rawResponse)
         },
-        model: 'gemini-pro'
+        model: 'gemini-2.0-flash'
       };
 
       console.log(`LLM call completed in ${processingTime}ms:`, {
@@ -2349,7 +2347,6 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
       throw new Error('Follow-up response missing specificApplication field');
     }
 
-    // Ensure it builds on previous context if available
     if (
       context.followUpContext?.previousQuery &&
       !response.contextualConnection.toLowerCase().includes('previous')
@@ -2373,7 +2370,6 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
     response: AnalysisResponse,
     _context: LLMPromptContext
   ): void {
-    // For general info, just ensure we have meaningful content
     if (!response.technicalSpecifications && !response.soundProfile && !response.typingFeel) {
       console.warn('General info response may lack substantive analysis content');
     }
@@ -2399,7 +2395,6 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
   ): AnalysisResponse {
     let overview = analysisError.message;
 
-    // Add helpful context based on error type
     if (analysisError.code === 'DATABASE_ERROR') {
       overview +=
         ' I can still provide general information about switches using my knowledge base.';
@@ -2418,7 +2413,6 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
       additionalNotes: `Error occurred at ${analysisError.timestamp?.toISOString()}. ${analysisError.recoverable ? 'This error is recoverable, please try again.' : 'This error requires attention from support.'}`
     };
 
-    // Add specific suggestions based on error context
     if (analysisError.details?.suggestions) {
       baseResponse.recommendations = analysisError.details.suggestions;
     } else if (analysisError.code === 'INTENT_RECOGNITION_FAILED') {
@@ -2516,7 +2510,6 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
     const switchNames = this.extractSwitchNamesFromQuery(request.query);
     let overview = `I can provide a simplified analysis for your query about ${switchNames.length > 0 ? switchNames.join(' and ') : 'keyboard switches'}.`;
 
-    // Add service status context
     const unavailableServices = errors.map((e) => {
       switch (e.code) {
         case 'DATABASE_ERROR':
@@ -2613,110 +2606,98 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
   }
 
   /**
-   * Utility: Extract switch names from query using simple patterns
+   * Utility: Extract switch names from query using database-driven approach
+   * Uses manufacturer prefixes as anchors to detect potential switch names
    */
   private extractSwitchNamesFromQuery(query: string): string[] {
-    const switchPatterns = [
-      /cherry\s*mx\s*\w+/gi,
-      /gateron\s*\w+/gi,
-      /kailh\s*\w+/gi,
-      /holy\s*panda/gi,
-      /zealios/gi,
-      /topre/gi,
-      /alpaca/gi,
-      /ink\s*black/gi,
-      /box\s*\w+/gi
-    ];
+    const lowerQuery = query.toLowerCase();
 
-    const found: string[] = [];
-    switchPatterns.forEach((pattern) => {
-      const matches = query.match(pattern);
-      if (matches) {
-        found.push(...matches.map((m) => m.trim()));
+    if (this.manufacturerPrefixes.length === 0) {
+      const words = lowerQuery.split(/\s+/);
+      return Array.from(new Set(words.filter((w) => w.length > 3)));
+    }
+
+    const matches: string[] = [];
+
+    for (const prefix of this.manufacturerPrefixes) {
+      const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const pattern = new RegExp(`(?:${escapedPrefix})\\s+([a-z0-9]+)(?:\\s+([a-z0-9]+))?`, 'gi');
+
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(lowerQuery)) !== null) {
+        const candidateParts = [prefix, match[1]];
+        if (match[2]) candidateParts.push(match[2]);
+        matches.push(candidateParts.join(' ').trim());
       }
-    });
+    }
 
-    return Array.from(new Set(found));
+    return Array.from(new Set(matches));
   }
 
   /**
-   * Utility: Check if query contains recognizable switch names
+   * Utility: Check if query contains recognizable switch names by using database lookup
    */
   private hasRecognizableSwitchNames(query: string): boolean {
-    return this.extractSwitchNamesFromQuery(query).length > 0;
+    const potentialNames = this.extractSwitchNamesFromQuery(query);
+    return potentialNames.length > 0;
   }
 
   /**
-   * Generate simplified switch analysis when full services unavailable
+   * Generate simplified switch analysis using database data when available
    */
-  private generateSimplifiedSwitchAnalysis(switchNames: string[], _availableData?: any): string {
+  private generateSimplifiedSwitchAnalysis(switchNames: string[], availableData?: any): string {
     if (switchNames.length === 0) {
       return `**General Switch Information**:\n\nKeyboard switches come in three main types:\n- **Linear**: Smooth keystroke, no tactile bump (good for gaming)\n- **Tactile**: Bump during actuation (good for typing)\n- **Clicky**: Tactile bump with audible click (good for typing)\n\nKey factors to consider:\n- Actuation force (light: 45g, medium: 50-60g, heavy: 65g+)\n- Travel distance (usually 4mm total)\n- Sound profile and office compatibility\n- Personal preference for feel and responsiveness`;
     }
 
+    const databaseSwitches = availableData?.databaseContext?.switches || [];
+    const switchData = this.extractAvailableSwitchData(databaseSwitches);
+
     let analysis = `## Basic Information for ${switchNames.join(', ')}\n\n`;
 
     switchNames.forEach((switchName) => {
-      const info = this.getBasicSwitchInfo(switchName);
-      analysis += `**${switchName}**:\n`;
-      analysis += `- Type: ${info.type}\n`;
-      analysis += `- Force: ${info.force}\n`;
-      analysis += `- Sound: ${info.sound}\n`;
-      analysis += `- Use Case: ${info.useCase}\n\n`;
+      const info = switchData[switchName.toLowerCase()];
+      if (info) {
+        analysis += `**${switchName}** (Database):\n`;
+        analysis += `- Type: ${info.type || 'Unknown'}\n`;
+        analysis += `- Manufacturer: ${info.manufacturer || 'Unknown'}\n`;
+        analysis += `- Force: ${info.actuationForce || 'Unknown'}\n`;
+        analysis += `- Sound: ${info.sound || 'Unknown'}\n`;
+        analysis += `- Use Case: ${info.useCase || 'Unknown'}\n\n`;
+      } else {
+        analysis += `**${switchName}** (Limited Info):\n`;
+        analysis += `- Database information not available\n`;
+        analysis += `- Type: Unknown\n`;
+        analysis += `- Force: Unknown\n`;
+        analysis += `- Sound: Unknown\n`;
+        analysis += `- Use Case: Unknown\n\n`;
+      }
     });
 
-    analysis += `**Note**: This is simplified information. For detailed specifications, sound profiles, and comprehensive comparisons, please try again when full analysis services are available.`;
+    analysis += `**Note**: This is simplified information based on available database data. For detailed specifications, sound profiles, and comprehensive comparisons, please try again when full analysis services are available.`;
 
     return analysis;
   }
 
   /**
-   * Get basic switch information for simplified responses
+   * Get basic switch information using database data when available
    */
-  private getBasicSwitchInfo(switchName: string): {
+  private getBasicSwitchInfo(_switchName: string): {
     type: string;
     force: string;
     sound: string;
     useCase: string;
   } {
-    const name = switchName.toLowerCase();
-
-    // Cherry MX switches
-    if (name.includes('cherry mx red') || name.includes('mx red')) {
-      return { type: 'Linear', force: '45g', sound: 'Quiet', useCase: 'Gaming' };
-    }
-    if (name.includes('cherry mx blue') || name.includes('mx blue')) {
-      return { type: 'Clicky', force: '50g', sound: 'Loud click', useCase: 'Typing' };
-    }
-    if (name.includes('cherry mx brown') || name.includes('mx brown')) {
-      return { type: 'Tactile', force: '45g', sound: 'Quiet tactile', useCase: 'Mixed use' };
-    }
-
-    // Gateron switches
-    if (name.includes('gateron red')) {
-      return { type: 'Linear', force: '45g', sound: 'Smooth', useCase: 'Gaming' };
-    }
-    if (name.includes('gateron yellow')) {
-      return { type: 'Linear', force: '50g', sound: 'Smooth', useCase: 'Gaming' };
-    }
-    if (name.includes('gateron blue')) {
-      return { type: 'Clicky', force: '50g', sound: 'Sharp click', useCase: 'Typing' };
-    }
-    if (name.includes('gateron brown')) {
-      return { type: 'Tactile', force: '45g', sound: 'Soft tactile', useCase: 'Mixed use' };
-    }
-
-    // Specialty switches
-    if (name.includes('holy panda')) {
-      return { type: 'Tactile', force: '67g', sound: 'Thocky', useCase: 'Enthusiast typing' };
-    }
-
-    // Generic fallback
-    return { type: 'Unknown', force: 'Variable', sound: 'Depends on type', useCase: 'General' };
+    return {
+      type: 'Unknown',
+      force: 'Unknown',
+      sound: 'Unknown',
+      useCase: 'Unknown'
+    };
   }
 
   /**
-   * Get basic information about multiple switches
+   * Get basic information about switches using database context
    */
   private getBasicSwitchInformation(switchNames: string[]): string {
     if (switchNames.length === 0) {
@@ -2770,7 +2751,6 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
     const analysisError = this.handleAnalysisError(primaryError, 'analysis_failure');
     const errors = [analysisError];
 
-    // Try to gather any additional context about what failed
     if (availableData?.additionalErrors) {
       errors.push(...availableData.additionalErrors);
     }
@@ -2781,7 +2761,6 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
 
     const degradedResponse = this.createGracefulDegradationResponse(request, errors, availableData);
 
-    // Log the degradation level used
     const degradationLevel = this.getDegradationLevel(degradedResponse);
     LoggingHelper.logWarning(
       request.requestId,
@@ -2805,5 +2784,68 @@ IMPORTANT: Your role is comprehensive analysis, not just data retrieval. Use dat
     if (response.analysisConfidence?.includes('Moderate')) return 2;
     if (response.analysisConfidence?.includes('Limited')) return 3;
     return 4;
+  }
+
+  /**
+   * Convert conversation history from analysis format to chat format
+   */
+  private convertConversationHistory(
+    conversationHistory?: Array<{ query: string; response: string; timestamp: Date }>
+  ): Array<{ role: 'user' | 'assistant'; content: string }> {
+    if (!conversationHistory || conversationHistory.length === 0) {
+      return [];
+    }
+
+    const result: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+
+    for (const entry of conversationHistory) {
+      result.push({ role: 'user', content: entry.query });
+      result.push({ role: 'assistant', content: entry.response });
+    }
+
+    return result;
+  }
+
+  /**
+   * Parse chain output into AnalysisResponse format
+   */
+  private parseChainResponse(
+    chainOutput: { response: string; retrievedDocuments: any[]; metadata: any },
+    promptContext: LLMPromptContext
+  ): AnalysisResponse {
+    try {
+      const response = chainOutput.response;
+
+      if (
+        promptContext.intent.category === 'switch_comparison' &&
+        response.trim().startsWith('{')
+      ) {
+        try {
+          const jsonResponse = JSON.parse(response);
+          return {
+            overview: jsonResponse.summary || 'Switch comparison analysis',
+            analysis: jsonResponse.summary || '',
+            comparedSwitches: jsonResponse.comparisonTable
+              ? { comparison: jsonResponse.comparisonTable }
+              : undefined,
+            recommendations: jsonResponse.recommendations || [],
+            technicalSpecifications: jsonResponse.comparisonTable || {},
+            additionalNotes: `Retrieved ${chainOutput.retrievedDocuments.length} documents (${chainOutput.metadata.processingTimeMs}ms)`
+          };
+        } catch {
+          console.warn('Failed to parse comparison response as JSON, falling back to markdown');
+        }
+      }
+
+      return this.parseMarkdownResponse(response, promptContext);
+    } catch (error) {
+      console.error('Error parsing chain response:', error);
+
+      return {
+        overview: 'Analysis completed with LCEL chain',
+        analysis: chainOutput.response,
+        additionalNotes: `Retrieved ${chainOutput.retrievedDocuments.length} documents (${chainOutput.metadata.processingTimeMs}ms) - fallback parsing used`
+      };
+    }
   }
 }

@@ -7,6 +7,7 @@
  */
 
 import { sql } from 'drizzle-orm';
+import { traceable } from 'langsmith/traceable';
 
 import { arrayToVector, db, switches as switchesTable } from '../db/index.js';
 import type {
@@ -17,17 +18,23 @@ import type {
 } from '../types/analysis.js';
 import { LoggingHelper } from '../utils/loggingHelper.js';
 import { LocalEmbeddingService } from './embeddingsLocal.js';
-import { GeminiService } from './gemini.js';
+import { createLlmService, type ILLMService } from './llm.factory.js';
 
 export class DatabaseService {
   private embeddingService: LocalEmbeddingService;
-  private geminiService: GeminiService;
+  private llmService: ILLMService;
   private embeddingServiceAvailable: boolean = true;
   private llmNormalizationEnabled: boolean = true;
+  private manufacturerCache: string[] | null = null;
 
   constructor() {
     this.embeddingService = new LocalEmbeddingService();
-    this.geminiService = new GeminiService();
+    this.llmService = createLlmService();
+
+    this.fetchSwitchSpecifications = this.fetchSwitchSpecifications.bind(this);
+    this.llmBasedNormalization = this.llmBasedNormalization.bind(this);
+    this.lookupSingleSwitch = this.lookupSingleSwitch.bind(this);
+    this.embeddingBasedLookup = this.embeddingBasedLookup.bind(this);
   }
 
   /**
@@ -38,121 +45,124 @@ export class DatabaseService {
    * @param requestId Optional request ID for logging
    * @returns Database context with lookup results and quality analysis
    */
-  async fetchSwitchSpecifications(
-    switchNames: string[],
-    options: {
-      confidenceThreshold?: number;
-      maxSwitchesPerLookup?: number;
-      enableEmbeddingSearch?: boolean;
-      enableFuzzyMatching?: boolean;
-      enableLLMNormalization?: boolean;
-    } = {},
-    requestId?: string
-  ): Promise<DatabaseContext> {
-    const startTime = Date.now();
-    const {
-      confidenceThreshold = 0.5,
-      maxSwitchesPerLookup = 5,
-      enableEmbeddingSearch = true,
-      enableFuzzyMatching = true,
-      enableLLMNormalization = true
-    } = options;
+  public fetchSwitchSpecifications = traceable(
+    async (
+      switchNames: string[],
+      options: {
+        confidenceThreshold?: number;
+        maxSwitchesPerLookup?: number;
+        enableEmbeddingSearch?: boolean;
+        enableFuzzyMatching?: boolean;
+        enableLLMNormalization?: boolean;
+      } = {},
+      requestId?: string
+    ): Promise<DatabaseContext> => {
+      const startTime = Date.now();
+      const {
+        confidenceThreshold = 0.5,
+        maxSwitchesPerLookup = 5,
+        enableEmbeddingSearch = true,
+        enableFuzzyMatching = true,
+        enableLLMNormalization = true
+      } = options;
 
-    const limitedSwitchNames = switchNames.slice(0, maxSwitchesPerLookup);
+      const limitedSwitchNames = switchNames.slice(0, maxSwitchesPerLookup);
 
-    let normalizedNames = limitedSwitchNames;
-    if (enableLLMNormalization && this.llmNormalizationEnabled) {
-      try {
-        const normalizationResults = await this.llmBasedNormalization(limitedSwitchNames);
-        normalizedNames = normalizationResults.map((result) => result.normalized);
+      let normalizedNames = limitedSwitchNames;
+      if (enableLLMNormalization && this.llmNormalizationEnabled) {
+        try {
+          const normalizationResults = await this.llmBasedNormalization(limitedSwitchNames);
+          normalizedNames = normalizationResults.map((result) => result.normalized);
 
-        console.log(
-          'LLM normalization results:',
-          normalizationResults.map(
-            (r) =>
-              `"${r.original}" → "${r.normalized}" (confidence: ${(r.confidence * 100).toFixed(1)}%)`
-          )
-        );
-      } catch (error: any) {
-        console.warn('LLM normalization failed, using simple normalization:', error.message);
-        this.llmNormalizationEnabled = false;
+          console.log(
+            'LLM normalization results:',
+            normalizationResults.map(
+              (r) =>
+                `"${r.original}" → "${r.normalized}" (confidence: ${(r.confidence * 100).toFixed(1)}%)`
+            )
+          );
+        } catch (error: any) {
+          console.warn('LLM normalization failed, using simple normalization:', error.message);
+          this.llmNormalizationEnabled = false;
+          const simpleResults = await this.normalizeSwitchNames(limitedSwitchNames);
+          normalizedNames = simpleResults.map((result) => result.normalized);
+        }
+      } else {
         const simpleResults = await this.normalizeSwitchNames(limitedSwitchNames);
         normalizedNames = simpleResults.map((result) => result.normalized);
       }
-    } else {
-      const simpleResults = await this.normalizeSwitchNames(limitedSwitchNames);
-      normalizedNames = simpleResults.map((result) => result.normalized);
-    }
 
-    const lookupResults: DatabaseLookupResult[] = [];
+      const lookupResults: DatabaseLookupResult[] = [];
 
-    console.log(
-      `DatabaseService: Starting lookup for ${normalizedNames.length} normalized switches:`,
-      normalizedNames
-    );
+      console.log(
+        `DatabaseService: Starting lookup for ${normalizedNames.length} normalized switches:`,
+        normalizedNames
+      );
 
-    for (let i = 0; i < normalizedNames.length; i++) {
-      const originalName = limitedSwitchNames[i];
-      const normalizedName = normalizedNames[i];
+      for (let i = 0; i < normalizedNames.length; i++) {
+        const originalName = limitedSwitchNames[i];
+        const normalizedName = normalizedNames[i];
 
-      try {
-        const result = await this.lookupSingleSwitch(
-          normalizedName,
-          confidenceThreshold,
-          enableEmbeddingSearch,
-          enableFuzzyMatching
-        );
-
-        if (!result.found && normalizedName !== originalName) {
-          console.log(
-            `Normalized lookup failed for "${normalizedName}", trying original "${originalName}"`
-          );
-          const fallbackResult = await this.lookupSingleSwitch(
-            originalName,
+        try {
+          const result = await this.lookupSingleSwitch(
+            normalizedName,
             confidenceThreshold,
             enableEmbeddingSearch,
             enableFuzzyMatching
           );
 
-          if (fallbackResult.found) {
-            fallbackResult.normalizedName = originalName;
-            lookupResults.push(fallbackResult);
+          if (!result.found && normalizedName !== originalName) {
+            console.log(
+              `Normalized lookup failed for "${normalizedName}", trying original "${originalName}"`
+            );
+            const fallbackResult = await this.lookupSingleSwitch(
+              originalName,
+              confidenceThreshold,
+              enableEmbeddingSearch,
+              enableFuzzyMatching
+            );
+
+            if (fallbackResult.found) {
+              fallbackResult.normalizedName = originalName;
+              lookupResults.push(fallbackResult);
+            } else {
+              lookupResults.push(result);
+            }
           } else {
             lookupResults.push(result);
           }
-        } else {
-          lookupResults.push(result);
+        } catch (error: any) {
+          console.error(`Failed to lookup switch "${normalizedName}":`, error.message);
+
+          lookupResults.push({
+            found: false,
+            normalizedName: originalName,
+            confidence: 0
+          });
         }
-      } catch (error: any) {
-        console.error(`Failed to lookup switch "${normalizedName}":`, error.message);
-
-        lookupResults.push({
-          found: false,
-          normalizedName: originalName,
-          confidence: 0
-        });
       }
-    }
 
-    const totalFound = lookupResults.filter((result) => result.found).length;
-    const lookupTimeMs = Date.now() - startTime;
+      const totalFound = lookupResults.filter((result) => result.found).length;
+      const lookupTimeMs = Date.now() - startTime;
 
-    console.log(
-      `DatabaseService: Lookup completed. Found ${totalFound}/${limitedSwitchNames.length} switches`
-    );
+      console.log(
+        `DatabaseService: Lookup completed. Found ${totalFound}/${limitedSwitchNames.length} switches`
+      );
 
-    const databaseContext: DatabaseContext = {
-      switches: lookupResults,
-      totalFound,
-      totalRequested: limitedSwitchNames.length
-    };
+      const databaseContext: DatabaseContext = {
+        switches: lookupResults,
+        totalFound,
+        totalRequested: limitedSwitchNames.length
+      };
 
-    if (requestId) {
-      LoggingHelper.logDatabaseLookup(requestId, databaseContext, lookupTimeMs);
-    }
+      if (requestId) {
+        LoggingHelper.logDatabaseLookup(requestId, databaseContext, lookupTimeMs);
+      }
 
-    return databaseContext;
-  }
+      return databaseContext;
+    },
+    { name: 'DatabaseService.fetchSwitchSpecifications' }
+  );
 
   /**
    * LLM-based switch name normalization for better database matching
@@ -160,50 +170,53 @@ export class DatabaseService {
    * @param switchNames Array of raw switch names from user input
    * @returns Array of normalized switch names with confidence scores
    */
-  async llmBasedNormalization(switchNames: string[]): Promise<NormalizationResult[]> {
-    if (switchNames.length === 0) {
-      return [];
-    }
-
-    try {
-      const prompt = this.buildNormalizationPrompt(switchNames);
-
-      const llmResponse = await this.geminiService.generate(prompt, {
-        temperature: 0.1,
-        maxOutputTokens: 800
-      });
-
-      const jsonMatch = llmResponse.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('No JSON object found in LLM normalization response');
+  public llmBasedNormalization = traceable(
+    async (switchNames: string[]): Promise<NormalizationResult[]> => {
+      if (switchNames.length === 0) {
+        return [];
       }
 
-      const parsedResponse = JSON.parse(jsonMatch[0]);
+      try {
+        const prompt = this.buildNormalizationPrompt(switchNames);
 
-      if (!parsedResponse.normalizations || !Array.isArray(parsedResponse.normalizations)) {
-        throw new Error('Invalid normalization response structure');
-      }
-
-      const results: NormalizationResult[] = [];
-
-      for (let i = 0; i < switchNames.length; i++) {
-        const original = switchNames[i];
-        const normData = parsedResponse.normalizations[i] || {};
-
-        results.push({
-          original,
-          normalized: normData.normalized || this.simpleNormalization(original),
-          confidence: Math.min(Math.max(normData.confidence || 0.5, 0), 1),
-          suggestions: Array.isArray(normData.suggestions) ? normData.suggestions : []
+        const llmResponse = await this.llmService.generate(prompt, {
+          temperature: 0.1,
+          maxOutputTokens: 800
         });
-      }
 
-      return results;
-    } catch (error: any) {
-      console.error('LLM normalization error:', error.message);
-      return this.normalizeSwitchNames(switchNames);
-    }
-  }
+        const jsonMatch = llmResponse.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          throw new Error('No JSON object found in LLM normalization response');
+        }
+
+        const parsedResponse = JSON.parse(jsonMatch[0]);
+
+        if (!parsedResponse.normalizations || !Array.isArray(parsedResponse.normalizations)) {
+          throw new Error('Invalid normalization response structure');
+        }
+
+        const results: NormalizationResult[] = [];
+
+        for (let i = 0; i < switchNames.length; i++) {
+          const original = switchNames[i];
+          const normData = parsedResponse.normalizations[i] || {};
+
+          results.push({
+            original,
+            normalized: normData.normalized || this.simpleNormalization(original),
+            confidence: Math.min(Math.max(normData.confidence || 0.5, 0), 1),
+            suggestions: Array.isArray(normData.suggestions) ? normData.suggestions : []
+          });
+        }
+
+        return results;
+      } catch (error: any) {
+        console.error('LLM normalization error:', error.message);
+        return this.normalizeSwitchNames(switchNames);
+      }
+    },
+    { name: 'DatabaseService.llmBasedNormalization' }
+  );
 
   /**
    * Build prompt for LLM-based switch name normalization
@@ -314,81 +327,84 @@ Respond with ONLY the JSON object, no additional text.`;
    * @param enableFuzzyMatching Whether to use fuzzy string matching
    * @returns Database lookup result for the switch
    */
-  private async lookupSingleSwitch(
-    switchName: string,
-    confidenceThreshold: number,
-    enableEmbeddingSearch: boolean,
-    enableFuzzyMatching: boolean
-  ): Promise<DatabaseLookupResult> {
-    let bestMatch: any = null;
-    let matchConfidence = 0;
-    let strategy = 'none';
+  private lookupSingleSwitch = traceable(
+    async (
+      switchName: string,
+      confidenceThreshold: number,
+      enableEmbeddingSearch: boolean,
+      enableFuzzyMatching: boolean
+    ): Promise<DatabaseLookupResult> => {
+      let bestMatch: any = null;
+      let matchConfidence = 0;
+      let strategy = 'none';
 
-    if (enableEmbeddingSearch && this.embeddingServiceAvailable) {
-      try {
-        const embeddingResult = await this.embeddingBasedLookup(switchName);
-        if (embeddingResult.confidence > matchConfidence) {
-          bestMatch = embeddingResult.match;
-          matchConfidence = embeddingResult.confidence;
-          strategy = 'embedding';
+      if (enableEmbeddingSearch && this.embeddingServiceAvailable) {
+        try {
+          const embeddingResult = await this.embeddingBasedLookup(switchName);
+          if (embeddingResult.confidence > matchConfidence) {
+            bestMatch = embeddingResult.match;
+            matchConfidence = embeddingResult.confidence;
+            strategy = 'embedding';
+          }
+        } catch (error: any) {
+          console.warn(`Embedding search failed for "${switchName}", falling back:`, error.message);
+          this.embeddingServiceAvailable = false;
         }
-      } catch (error: any) {
-        console.warn(`Embedding search failed for "${switchName}", falling back:`, error.message);
-        this.embeddingServiceAvailable = false;
       }
-    }
 
-    if (!bestMatch || matchConfidence < 0.9) {
-      try {
-        const exactResult = await this.exactNameLookup(switchName);
-        if (exactResult.confidence > matchConfidence) {
-          bestMatch = exactResult.match;
-          matchConfidence = exactResult.confidence;
-          strategy = 'exact';
+      if (!bestMatch || matchConfidence < 0.9) {
+        try {
+          const exactResult = await this.exactNameLookup(switchName);
+          if (exactResult.confidence > matchConfidence) {
+            bestMatch = exactResult.match;
+            matchConfidence = exactResult.confidence;
+            strategy = 'exact';
+          }
+        } catch (error: any) {
+          console.warn(`Exact name lookup failed for "${switchName}":`, error.message);
         }
-      } catch (error: any) {
-        console.warn(`Exact name lookup failed for "${switchName}":`, error.message);
       }
-    }
 
-    if (enableFuzzyMatching && (!bestMatch || matchConfidence < confidenceThreshold)) {
-      try {
-        const fuzzyResult = await this.fuzzyNameLookup(switchName);
-        if (fuzzyResult.confidence > matchConfidence) {
-          bestMatch = fuzzyResult.match;
-          matchConfidence = fuzzyResult.confidence;
-          strategy = 'fuzzy';
+      if (enableFuzzyMatching && (!bestMatch || matchConfidence < confidenceThreshold)) {
+        try {
+          const fuzzyResult = await this.fuzzyNameLookup(switchName);
+          if (fuzzyResult.confidence > matchConfidence) {
+            bestMatch = fuzzyResult.match;
+            matchConfidence = fuzzyResult.confidence;
+            strategy = 'fuzzy';
+          }
+        } catch (error: any) {
+          console.warn(`Fuzzy lookup failed for "${switchName}":`, error.message);
         }
-      } catch (error: any) {
-        console.warn(`Fuzzy lookup failed for "${switchName}":`, error.message);
       }
-    }
 
-    if (bestMatch && matchConfidence >= confidenceThreshold) {
-      const switchData = this.formatSwitchData(bestMatch);
+      if (bestMatch && matchConfidence >= confidenceThreshold) {
+        const switchData = this.formatSwitchData(bestMatch);
 
-      console.log(
-        `Found switch "${switchName}" using ${strategy} strategy (confidence: ${(matchConfidence * 100).toFixed(1)}%)`
-      );
+        console.log(
+          `Found switch "${switchName}" using ${strategy} strategy (confidence: ${(matchConfidence * 100).toFixed(1)}%)`
+        );
 
-      return {
-        found: true,
-        data: switchData,
-        normalizedName: bestMatch.name,
-        confidence: matchConfidence
-      };
-    } else {
-      console.log(
-        `No match found for "${switchName}" (best confidence: ${(matchConfidence * 100).toFixed(1)}%)`
-      );
+        return {
+          found: true,
+          data: switchData,
+          normalizedName: bestMatch.name,
+          confidence: matchConfidence
+        };
+      } else {
+        console.log(
+          `No match found for "${switchName}" (best confidence: ${(matchConfidence * 100).toFixed(1)}%)`
+        );
 
-      return {
-        found: false,
-        normalizedName: switchName,
-        confidence: matchConfidence
-      };
-    }
-  }
+        return {
+          found: false,
+          normalizedName: switchName,
+          confidence: matchConfidence
+        };
+      }
+    },
+    { name: 'DatabaseService.lookupSingleSwitch' }
+  );
 
   /**
    * Embedding-based switch lookup using vector similarity
@@ -396,55 +412,56 @@ Respond with ONLY the JSON object, no additional text.`;
    * @param switchName Name of the switch to search for
    * @returns Match result with confidence score
    */
-  private async embeddingBasedLookup(
-    switchName: string
-  ): Promise<{ match: any; confidence: number }> {
-    const switchEmbedding = await this.embeddingService.embedText(switchName);
-    const switchEmbeddingSql = arrayToVector(switchEmbedding);
+  private embeddingBasedLookup = traceable(
+    async (switchName: string): Promise<{ match: any; confidence: number }> => {
+      const switchEmbedding = await this.embeddingService.embedText(switchName);
+      const switchEmbeddingSql = arrayToVector(switchEmbedding);
 
-    const results = await db.execute<{
-      name: string;
-      manufacturer: string;
-      type: string | null;
-      topHousing: string | null;
-      bottomHousing: string | null;
-      stem: string | null;
-      mount: string | null;
-      spring: string | null;
-      actuationForce: number | null;
-      bottomForce: number | null;
-      preTravel: number | null;
-      totalTravel: number | null;
-      similarity: number;
-    }>(sql`
-      SELECT 
-        s.name,
-        s.manufacturer,
-        s.type,
-        s.top_housing as "topHousing",
-        s.bottom_housing as "bottomHousing", 
-        s.stem,
-        s.mount,
-        s.spring,
-        s.actuation_force as "actuationForce",
-        s.bottom_force as "bottomForce",
-        s.pre_travel as "preTravel",
-        s.total_travel as "totalTravel",
-        1 - ((s.embedding::text)::vector <=> ${switchEmbeddingSql}) AS similarity
-      FROM ${switchesTable} AS s
-      ORDER BY similarity DESC
-      LIMIT 1
-    `);
+      const results = await db.execute<{
+        name: string;
+        manufacturer: string;
+        type: string | null;
+        topHousing: string | null;
+        bottomHousing: string | null;
+        stem: string | null;
+        mount: string | null;
+        spring: string | null;
+        actuationForce: number | null;
+        bottomForce: number | null;
+        preTravel: number | null;
+        totalTravel: number | null;
+        similarity: number;
+      }>(sql`
+        SELECT 
+          s.name,
+          s.manufacturer,
+          s.type,
+          s.top_housing as "topHousing",
+          s.bottom_housing as "bottomHousing", 
+          s.stem,
+          s.mount,
+          s.spring,
+          s.actuation_force as "actuationForce",
+          s.bottom_force as "bottomForce",
+          s.pre_travel as "preTravel",
+          s.total_travel as "totalTravel",
+          1 - ((s.embedding::text)::vector <=> ${switchEmbeddingSql}) AS similarity
+        FROM ${switchesTable} AS s
+        ORDER BY similarity DESC
+        LIMIT 1
+      `);
 
-    if (results.length === 0) {
-      return { match: null, confidence: 0 };
-    }
+      if (results.length === 0) {
+        return { match: null, confidence: 0 };
+      }
 
-    return {
-      match: results[0],
-      confidence: results[0].similarity
-    };
-  }
+      return {
+        match: results[0],
+        confidence: results[0].similarity
+      };
+    },
+    { name: 'DatabaseService.embeddingBasedLookup' }
+  );
 
   /**
    * Exact name matching lookup
@@ -973,5 +990,33 @@ Respond with ONLY the JSON object, no additional text.`;
     }
 
     return words.join(' & ');
+  }
+
+  /**
+   * Get cached list of manufacturer prefixes (lower-cased)
+   * Queries database once and caches the result for subsequent calls
+   */
+  async getManufacturerPrefixes(): Promise<string[]> {
+    if (this.manufacturerCache) {
+      return this.manufacturerCache;
+    }
+
+    try {
+      const results = await db.execute<{ manufacturer: string }>(
+        sql`SELECT DISTINCT manufacturer FROM ${switchesTable}`
+      );
+
+      this.manufacturerCache = results
+        .map((r) => (r.manufacturer || '').toLowerCase())
+        .filter((m) => m.length > 0)
+        // Sort by length (longer first) to prefer multi-word manufacturers like "cherry mx"
+        .sort((a, b) => b.length - a.length);
+
+      return this.manufacturerCache;
+    } catch (error) {
+      console.error('Failed to fetch manufacturer prefixes:', error);
+      this.manufacturerCache = [];
+      return [];
+    }
   }
 }

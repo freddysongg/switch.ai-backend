@@ -12,9 +12,8 @@ import { DatabaseSanitizer } from '../utils/databaseSanitizer.js';
 import { fuseResults } from '../utils/hybridSearch.js';
 import { DatabaseService } from './db.js';
 import { LocalEmbeddingService } from './embeddingsLocal.js';
-import { GeminiService } from './gemini.js';
+import { createLlmService, type ILLMService } from './llm.factory.js';
 import { PromptBuilder } from './promptBuilder.js';
-import { RerankService } from './rerank.js';
 
 interface SwitchContextForPrompt {
   [key: string]: unknown;
@@ -75,9 +74,9 @@ const TOP_N = 3;
 
 export class ChatService {
   private embeddingService: LocalEmbeddingService | null = null;
-  private geminiService: GeminiService | null = null;
+  private llmService: ILLMService | null = null;
   private databaseService: DatabaseService | null = null;
-  private rerankService: RerankService | null = null;
+  private manufacturerPrefixes: string[] = [];
 
   /**
    * Get or create the embedding service (lazy initialization)
@@ -90,13 +89,13 @@ export class ChatService {
   }
 
   /**
-   * Get or create the Gemini service (lazy initialization)
+   * Get or create the LLM service (lazy initialization)
    */
-  private getGeminiService(): GeminiService {
-    if (!this.geminiService) {
-      this.geminiService = new GeminiService();
+  private getLlmService(): ILLMService {
+    if (!this.llmService) {
+      this.llmService = createLlmService();
     }
-    return this.geminiService;
+    return this.llmService;
   }
 
   /**
@@ -110,13 +109,18 @@ export class ChatService {
   }
 
   /**
-   * Get or create the rerank service (lazy initialization)
+   * Lazy-load and cache manufacturer prefixes from the database
    */
-  private getRerankService(): RerankService {
-    if (!this.rerankService) {
-      this.rerankService = new RerankService();
+  private async loadManufacturerPrefixes(): Promise<string[]> {
+    if (this.manufacturerPrefixes.length > 0) return this.manufacturerPrefixes;
+    try {
+      const prefixes = await this.getDatabaseService().getManufacturerPrefixes();
+      this.manufacturerPrefixes = prefixes;
+      return prefixes;
+    } catch (e) {
+      console.warn('Failed to load manufacturer prefixes – falling back to basic extraction', e);
+      return [];
     }
-    return this.rerankService;
   }
 
   private truncateText(text: string, max: number): string {
@@ -272,25 +276,26 @@ export class ChatService {
    * Extracts potential switch names from the query using heuristics
    */
   private async extractPotentialSwitchNames(query: string): Promise<string[]> {
-    const potential: string[] = [];
+    const prefixes = await this.loadManufacturerPrefixes();
+    if (prefixes.length === 0) {
+      return [...new Set(query.split(/\s+/).filter((t) => t.length > 3))];
+    }
 
-    const switchPatterns = [
-      /(?:gateron|cherry|kailh|akko|jwk|novelkeys|zeal|holy)\s+[\w\s-]+/gi,
-      /(?:red|blue|brown|black|green|yellow|white|silver|gold|pink|purple|orange)\s*(?:switch|switches)?/gi,
-      /(?:cream|ink|oil\s*king|banana\s*split|alpaca|tangerine|lavender|silent|tactile|linear|clicky)/gi
-    ];
+    const lowerQuery = query.toLowerCase();
+    const matches: string[] = [];
 
-    for (const pattern of switchPatterns) {
-      const matches = [...query.matchAll(pattern)];
-      for (const match of matches) {
-        const candidate = match[0].trim().replace(/\s*switches?\s*$/i, '');
-        if (candidate.length > 2) {
-          potential.push(candidate);
-        }
+    for (const prefix of prefixes) {
+      const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`(?:${escaped})\s+([a-z0-9]+)(?:\s+([a-z0-9]+))?`, 'gi');
+      let m: RegExpExecArray | null;
+      while ((m = regex.exec(lowerQuery)) !== null) {
+        const parts = [prefix, m[1]];
+        if (m[2]) parts.push(m[2]);
+        matches.push(parts.join(' ').trim());
       }
     }
 
-    return [...new Set(potential)];
+    return [...new Set(matches)];
   }
 
   /**
@@ -298,170 +303,9 @@ export class ChatService {
    * Handles multiple query formats and extraction strategies
    */
   private async parseAndExtractSwitchNames(userQuery: string): Promise<string[]> {
-    const query = userQuery.toLowerCase().trim();
-    const extractedNames: string[] = [];
-
-    // Strategy 1: Direct pattern matching for common comparison formats
-    const directPatterns = [
-      // "X vs Y" patterns
-      /(\w[\w\s-]*?)\s+(?:vs|versus)\s+(\w[\w\s-]*?)(?:\s|$|\?|\.|,)/gi,
-      // "compare X and Y" patterns
-      /compare\s+(\w[\w\s-]*?)\s+(?:and|with|to)\s+(\w[\w\s-]*?)(?:\s|$|\?|\.|,)/gi,
-      // "difference between X and Y" patterns
-      /difference\s+between\s+(\w[\w\s-]*?)\s+and\s+(\w[\w\s-]*?)(?:\s|$|\?|\.|,)/gi,
-      // "X or Y" patterns (when comparison keywords are present)
-      /(\w[\w\s-]*?)\s+or\s+(\w[\w\s-]*?)(?:\s|$|\?|\.|,)/gi
-    ];
-
-    for (const pattern of directPatterns) {
-      const matches = [...query.matchAll(pattern)];
-      for (const match of matches) {
-        if (match[1] && match[2]) {
-          extractedNames.push(match[1].trim(), match[2].trim());
-        }
-      }
-    }
-
-    // Strategy 2: Enhanced brand-based extraction
-    const brandPatterns = [
-      // Comprehensive brand patterns with multiple name formats
-      /(?:gateron)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:cherry)\s+mx\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:cherry)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:kailh)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:akko)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:jwk|durock)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:novelkeys|novel\s*keys)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:zeal|zealios)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(?:holy)\s+([\w\s-]+?)(?:\s+switch|\s*$|\s*[,.\?])/gi
-    ];
-
-    for (const pattern of brandPatterns) {
-      const matches = [...query.matchAll(pattern)];
-      for (const match of matches) {
-        if (match[1]) {
-          const fullName = match[0].replace(/\s+switch$/i, '').trim();
-          extractedNames.push(fullName);
-        }
-      }
-    }
-
-    // Strategy 3: Common switch name recognition (exact matches)
-    const commonSwitches = [
-      // Popular linear switches
-      'gateron oil king',
-      'gateron ink black',
-      'gateron yellow',
-      'gateron red',
-      'gateron black',
-      'cherry mx red',
-      'cherry mx black',
-      'cherry mx silver',
-      'cherry mx speed silver',
-      'kailh red',
-      'kailh black',
-      'kailh speed silver',
-      'akko cs rose red',
-      'akko cs wine red',
-      'akko cs silver',
-      'jwk alpaca',
-      'jwk banana split',
-      'jwk lavender',
-      'novelkeys cream',
-      'novelkeys silk yellow',
-      'novelkeys dry yellow',
-
-      // Popular tactile switches
-      'cherry mx brown',
-      'cherry mx clear',
-      'gateron brown',
-      'gateron g pro brown',
-      'kailh brown',
-      'kailh pro purple',
-      'akko cs lavender purple',
-      'akko cs ocean blue',
-      'holy panda',
-      'glorious panda',
-      'zealios v2',
-      'zilents v2',
-      'durock t1',
-      'durock medium tactile',
-
-      // Popular clicky switches
-      'cherry mx blue',
-      'cherry mx green',
-      'gateron blue',
-      'gateron green',
-      'kailh blue',
-      'kailh white',
-      'kailh pink',
-      'novelkeys sherbet'
-    ];
-
-    for (const switchName of commonSwitches) {
-      if (query.includes(switchName)) {
-        extractedNames.push(switchName);
-      }
-    }
-
-    // Strategy 4: Color-based switch extraction with context
-    const colorPatterns = [
-      /(?:gateron|cherry|kailh|akko)\s+(red|blue|brown|black|green|yellow|white|silver|gold|pink|purple|orange|clear)(?:\s+switch|\s*$|\s*[,.\?])/gi,
-      /(red|blue|brown|black|green|yellow|white|silver|gold|pink|purple|orange|clear)\s+(?:switch|linear|tactile|clicky)(?:\s*$|\s*[,.\?])/gi
-    ];
-
-    for (const pattern of colorPatterns) {
-      const matches = [...query.matchAll(pattern)];
-      for (const match of matches) {
-        extractedNames.push(match[0].replace(/\s+switch$/i, '').trim());
-      }
-    }
-
-    // Strategy 5: Handle quoted or explicitly mentioned switches
-    const quotedSwitches = query.match(/"([^"]+)"/g) || query.match(/'([^']+)'/g);
-    if (quotedSwitches) {
-      for (const quoted of quotedSwitches) {
-        const cleaned = quoted.replace(/['"]/g, '').trim();
-        if (cleaned.length > 2) {
-          extractedNames.push(cleaned);
-        }
-      }
-    }
-
-    // Strategy 6: List detection (switches separated by commas, "and", etc.)
-    if (query.includes(',') || query.includes(' and ')) {
-      const listItems = query
-        .split(/,|\s+and\s+/)
-        .map((item) => item.trim())
-        .filter((item) => item.length > 2)
-        .filter((item) => {
-          const switchIndicators = [
-            'switch',
-            'linear',
-            'tactile',
-            'clicky',
-            'mx',
-            'gateron',
-            'cherry',
-            'kailh'
-          ];
-          return (
-            switchIndicators.some((indicator) => item.includes(indicator)) ||
-            /^[a-z\s-]+$/.test(item)
-          );
-        });
-
-      extractedNames.push(...listItems);
-    }
-
-    const cleanedNames = extractedNames
-      .map((name) => name.trim())
-      .filter((name) => name.length > 2)
-      .filter((name) => !['switch', 'switches', 'linear', 'tactile', 'clicky'].includes(name))
-      .map((name) => name.replace(/\s*switches?\s*$/i, ''))
-      .filter((name, index, array) => array.indexOf(name) === index);
-
-    return cleanedNames;
+    const queryLower = userQuery.toLowerCase();
+    const names = await this.extractPotentialSwitchNames(queryLower);
+    return names;
   }
 
   /**
@@ -554,38 +398,25 @@ export class ChatService {
       }
 
       // Strategy 4: Brand + partial name matching
-      const brandMappings = {
-        gateron: ['gateron'],
-        cherry: ['cherry mx', 'cherry'],
-        kailh: ['kailh'],
-        akko: ['akko cs', 'akko'],
-        jwk: ['jwk', 'durock'],
-        novelkeys: ['novelkeys', 'nk'],
-        zeal: ['zealios', 'zilents', 'zeal'],
-        holy: ['holy panda']
-      };
+      const prefixes = await this.loadManufacturerPrefixes();
+      for (const prefix of prefixes) {
+        if (!cleanName.startsWith(prefix)) continue;
 
-      for (const [brand, dbPrefixes] of Object.entries(brandMappings)) {
-        if (cleanName.includes(brand)) {
-          for (const prefix of dbPrefixes) {
-            results = await db
-              .select({ name: switchesTable.name })
-              .from(switchesTable)
-              .where(sql`LOWER(${switchesTable.name}) LIKE ${prefix.toLowerCase() + '%'}`)
-              .limit(5);
+        results = await db
+          .select({ name: switchesTable.name })
+          .from(switchesTable)
+          .where(sql`LOWER(${switchesTable.name}) LIKE ${prefix + '%'}`)
+          .limit(5);
 
-            if (results.length > 0) {
-              const bestMatch =
-                results.find((result) => {
-                  const resultLower = result.name.toLowerCase();
-                  return words.some((word) => resultLower.includes(word));
-                }) || results[0];
+        if (results.length > 0) {
+          const bestMatch =
+            results.find((result) => {
+              const resultLower = result.name.toLowerCase();
+              return words.some((word) => resultLower.includes(word));
+            }) || results[0];
 
-              validated.push(bestMatch.name);
-              break;
-            }
-          }
-          if (validated.length > 0) break;
+          validated.push(bestMatch.name);
+          break;
         }
       }
     }
@@ -1191,7 +1022,7 @@ export class ChatService {
 User Query: <user_query>${rawQuery}</user_query>`;
 
     try {
-      const transformedQuery = await this.getGeminiService().generate(transformationPrompt);
+      const transformedQuery = await this.getLlmService().generate(transformationPrompt);
       return transformedQuery.trim();
     } catch (error) {
       console.warn('Query transformation failed, falling back to original query:', error);
@@ -1249,30 +1080,12 @@ User Query: <user_query>${rawQuery}</user_query>`;
 
       if (topNResults.length > 0) {
         try {
-          const contextsForReranking = topNResults.map((result) => ({
-            name: result.name,
-            manufacturer: result.manufacturer,
-            type: result.type,
-            spring: result.spring,
-            actuationForce: result.actuationForce,
-            description_text: this.buildSwitchDescription(result),
-            similarity: result.rrfScore
-          }));
-
-          const rerankedItems = await this.getRerankService().rerankContexts(
-            rawUserQuery,
-            contextsForReranking
-          );
-
-          const rerankScoreMap = new Map(rerankedItems.map((item) => [item.item_id, item]));
-
           const reorderedResults = topNResults
             .map((result) => {
-              const rerankInfo = rerankScoreMap.get(result.name);
               return {
                 ...result,
-                llmRelevanceScore: rerankInfo?.relevance_score || result.rrfScore,
-                llmJustification: rerankInfo?.justification
+                llmRelevanceScore: result.rrfScore,
+                llmJustification: 'Original ordering (rerank service removed)'
               };
             })
             .sort((a, b) => (b.llmRelevanceScore || 0) - (a.llmRelevanceScore || 0));
@@ -1325,14 +1138,14 @@ User Query: <user_query>${rawQuery}</user_query>`;
       if (switchContextsForPrompt.length === 0) {
         try {
           const fallbackPrompt = AI_CONFIG.GENERAL_KNOWLEDGE_FALLBACK_PROMPT(rawUserQuery);
-          const assistantText = await this.getGeminiService().generate(fallbackPrompt);
+          const assistantText = await this.getLlmService().generate(fallbackPrompt);
           return {
             assistantText,
             switchesWithRelevance: []
           };
         } catch (error) {
           console.warn(
-            'GeminiService failed during General Knowledge Fallback, using hardcoded fallback:',
+            'LLM Service failed during General Knowledge Fallback, using hardcoded fallback:',
             error
           );
 
@@ -1354,7 +1167,7 @@ User Query: <user_query>${rawQuery}</user_query>`;
         rawUserQuery
       );
 
-      const assistantText = await this.getGeminiService().generate(prompt);
+      const assistantText = await this.getLlmService().generate(prompt);
 
       return {
         assistantText,
@@ -1440,7 +1253,6 @@ User Query: <user_query>${rawQuery}</user_query>`;
     rawUserQuery: string,
     currentConversationId: string
   ): Promise<string> {
-    // Original semantic search logic
     const queryEmbedding = await this.getEmbeddingService().embedText(rawUserQuery);
     const queryEmbeddingSql = arrayToVector(queryEmbedding);
 
@@ -1471,10 +1283,10 @@ User Query: <user_query>${rawQuery}</user_query>`;
     if (switchContextsForPrompt.length === 0) {
       try {
         const fallbackPrompt = AI_CONFIG.GENERAL_KNOWLEDGE_FALLBACK_PROMPT(rawUserQuery);
-        return await this.getGeminiService().generate(fallbackPrompt);
+        return await this.getLlmService().generate(fallbackPrompt);
       } catch (error) {
         console.warn(
-          'GeminiService failed during General Knowledge Fallback, using hardcoded fallback:',
+          'LLM Service failed during General Knowledge Fallback, using hardcoded fallback:',
           error
         );
 
@@ -1492,7 +1304,7 @@ User Query: <user_query>${rawQuery}</user_query>`;
       rawUserQuery
     );
 
-    return await this.getGeminiService().generate(prompt);
+    return await this.getLlmService().generate(prompt);
   }
 
   /**
@@ -1846,7 +1658,7 @@ User Query: <user_query>${rawQuery}</user_query>`;
             };
           }
 
-          const assistantText = await this.getGeminiService().generate(comparisonPrompt);
+          const assistantText = await this.getLlmService().generate(comparisonPrompt);
 
           if (assistantText === AI_CONFIG.FALLBACK_ERROR_MESSAGE_LLM) {
             const enhancedFallback = `I apologize, but I'm having trouble generating the comparison for ${foundSwitches.map((s) => s.name).join(' and ')} right now. This could be due to AI service limitations. Please try again in a moment, or feel free to ask about these switches individually.`;
