@@ -9,7 +9,6 @@ export type MessageEmbedding = InferSelectModel<typeof schema.messageEmbeddings>
 export type RateLimit = InferSelectModel<typeof schema.rateLimits>;
 export type AnalyticsEvent = InferSelectModel<typeof schema.analyticsEvents>;
 
-// Database interface
 export interface Database {
   users: User[];
   conversations: Conversation[];

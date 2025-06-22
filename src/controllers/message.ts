@@ -1,4 +1,3 @@
-// src/controllers/message.controller.ts
 import { Request, Response } from 'express';
 import { validate as isValidUUID } from 'uuid';
 
@@ -133,7 +132,6 @@ export class MessageController {
       if (error instanceof ValidationError) {
         res.status(400).json({ error: error.message });
       } else if (error instanceof AuthError) {
-        // Should not happen if service logic is correct for get by id
         res.status(403).json({ error: error.message });
       } else if (error instanceof DatabaseError) {
         res.status(500).json({ error: 'Failed to retrieve message.' });

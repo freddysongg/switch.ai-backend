@@ -34,11 +34,8 @@ export class LocalEmbeddingService {
     try {
       const model: FeatureExtractionPipeline = await this.modelPromise;
 
-      // Perform embedding
-      // `pooling: 'mean'` averages token embeddings. `normalize: true` normalizes the resulting vector.
       const output = await model(text, { pooling: 'mean', normalize: true });
 
-      // Extract the vector data.
       if (output && output.data && typeof output.data[0] === 'number') {
         return Array.from(output.data as Float32Array);
       } else if (

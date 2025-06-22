@@ -14,7 +14,6 @@ export interface Conversation {
   updatedAt: Date;
 }
 
-// Chat request/response interfaces
 export interface ChatRequest {
   message: string;
   conversationId?: string;
@@ -25,9 +24,12 @@ export interface ChatResponse {
   role: 'assistant';
   content: string;
   metadata?: Record<string, any>;
+  comparisonTable?: Record<string, any>;
+  summary?: string;
+  recommendations?: Recommendation[];
+  switches?: SwitchWithRelevanceInfo[];
 }
 
-// Rate limiting interfaces
 export interface RateLimit {
   userId: string;
   endpoint: string;
@@ -35,7 +37,6 @@ export interface RateLimit {
   resetAt: Date;
 }
 
-// Analytics interfaces
 export interface AnalyticsEvent {
   userId?: string;
   eventType: string;
@@ -48,4 +49,23 @@ export interface User {
   user_metadata?: Record<string, any>;
   aud?: string;
   created_at?: string;
+}
+
+export interface SwitchWithRelevanceInfo {
+  name: string;
+  manufacturer: string;
+  type: string | null;
+  relevance_score?: number;
+  justification?: string;
+}
+
+export interface Recommendation {
+  text: string;
+  reasoning: string;
+}
+
+export interface StructuredComparisonResponse {
+  comparisonTable: Record<string, any>;
+  summary: string;
+  recommendations: Recommendation[];
 }

@@ -1,0 +1,28 @@
+{
+  "entry": ["src/index.ts"],
+  "extensions": [".ts", ".tsx", ".js", ".jsx"],
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "**/tests/**",
+    "**/*.d.ts"
+  ],
+  "ignoreUnresolved": [],
+  "ignoreUnimported": [
+    "typescript",
+    "@types/node",
+    "tsx",
+    "prettier",
+    "@dotenvx/dotenvx",
+    "drizzle-kit",
+    "supabase"
+  ],
+  "ignoreUnused": [
+    "typescript",
+    "@types/node"
+  ],
+  "respectGitignore": true,
+  "showPreset": "files"
+} 

@@ -1,0 +1,19 @@
+{
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.spec.ts",
+    "src/tests/**/*",
+    "node_modules",
+    "dist"
+  ],
+  "entrypoints": [
+    "src/index.ts"
+  ],
+  "allowUnusedTypes": false,
+  "showLineNumber": true,
+  "excludeDeclarationFiles": true,
+  "findCompletelyUnusedFiles": true,
+  "deleteUnusedFiles": false,
+  "ignoreTestFiles": true
+} 

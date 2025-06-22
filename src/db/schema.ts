@@ -10,7 +10,6 @@ import {
   uuid
 } from 'drizzle-orm/pg-core';
 
-// Users table
 export const users = pgTable('users', {
   id: uuid('id')
     .primaryKey()
@@ -24,7 +23,6 @@ export const users = pgTable('users', {
   updatedAt: timestamp('updated_at').defaultNow().notNull()
 });
 
-// Conversations table
 export const conversations = pgTable('conversations', {
   id: uuid('id')
     .primaryKey()
@@ -39,7 +37,6 @@ export const conversations = pgTable('conversations', {
   updatedAt: timestamp('updated_at').defaultNow().notNull()
 });
 
-// Messages table
 export const messages = pgTable('messages', {
   id: uuid('id')
     .primaryKey()
@@ -90,13 +87,12 @@ export const switches = pgTable('switches', {
   bottomForce: real('bottom_force'),
   preTravel: real('pre_travel'),
   totalTravel: real('total_travel'),
-  embedding: jsonb('embedding').notNull()
+  embedding: jsonb('embedding').notNull(),
+  fts: text('fts').$type<'tsvector'>()
 });
 
-// Vector operation helpers
 export const vectorFromJson = (data: number[]) => sql`cast(${JSON.stringify(data)} as vector)`;
 
-// Rate limiting table
 export const rateLimits = pgTable('rate_limits', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id')
@@ -109,7 +105,6 @@ export const rateLimits = pgTable('rate_limits', {
   updatedAt: timestamp('updated_at').defaultNow().notNull()
 });
 
-// Analytics events
 export const analyticsEvents = pgTable('analytics_events', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').references(() => users.id),
@@ -118,18 +113,15 @@ export const analyticsEvents = pgTable('analytics_events', {
   createdAt: timestamp('created_at').defaultNow().notNull()
 });
 
-// Health check table
 export const health = pgTable('health', {
   id: uuid('id').primaryKey().defaultRandom(),
   status: text('status').notNull().default('ok'),
   lastChecked: timestamp('last_checked').defaultNow().notNull()
 });
 
-// Helper functions for vector operations
 export const arrayToVector = (arr: number[]) => sql`cast(${JSON.stringify(arr)} as vector)`;
 export const jsonToVector = (jsonArr: string) => sql`cast(${jsonArr} as vector)`;
 export const textToVector = (text: string) => sql`${text}::vector`;
 
-// Custom SQL functions for vector operations
 export const cosineSimilarity = (embedding1: AnyPgColumn, embedding2: AnyPgColumn) =>
   sql`1 - (${embedding1}::vector <=> ${embedding2}::vector)`;
