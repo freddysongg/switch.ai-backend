@@ -657,6 +657,17 @@ export const inputSanitization = (req: Request, res: Response, next: NextFunctio
       return;
     }
 
+    const oauthSkipPaths = [
+      '/api/auth/google/callback',
+      '/api/auth/github/callback',
+      '/api/auth/oauth/callback'
+    ];
+    if (oauthSkipPaths.some((path) => req.path.includes(path))) {
+      console.log(`[INPUT_SANITIZATION] Skipping OAuth callback endpoint: ${req.path}`);
+      next();
+      return;
+    }
+
     const inputSources = {
       body: req.body,
       query: req.query,

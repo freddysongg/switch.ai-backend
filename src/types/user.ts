@@ -38,3 +38,11 @@ export interface JwtPayload {
   role?: string;
   name?: string | null;
 }
+
+export interface GoogleUserProfile {
+  googleId: string;
+  email: string;
+  name: string | null;
+  picture: string | null;
+  emailVerified: boolean;
+}

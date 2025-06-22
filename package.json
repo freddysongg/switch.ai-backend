@@ -4,7 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "npx dotenvx run --env-file .env.local -- tsx watch src/index.ts",
-		"start": "node src/index.ts",
+		"start": "npx dotenvx run --env-file .env.production -- node dist/index.js",
 		"build": "tsc",
 		"format": "prettier --write \"src/**/*.ts\"",
 		"format:check": "prettier --check \"src/**/*.ts\"",
@@ -113,6 +113,7 @@
 		"bcrypt": "^6.0.0",
 		"express": "^5.1.0",
 		"express-rate-limit": "^7.4.1",
+		"google-auth-library": "^10.1.0",
 		"helmet": "^8.1.0",
 		"jsonwebtoken": "^9.0.2",
 		"langchain": "^0.3.28",
